@@ -39,6 +39,22 @@ def send_discord(message):
 # Main
 # ----------------------------------------------------------------
 async def check_slots():
+   # Skip outside active hours (22:00 - 07:00 Vilnius time)
+    from datetime import datetime
+    import zoneinfo
+    vilnius_time = datetime.now(zoneinfo.ZoneInfo("Europe/Vilnius"))
+    current_hour = vilnius_time.hour
+    current_day  = vilnius_time.day
+
+    if current_hour >= 22 or current_hour < 7:
+        print(f"Outside active hours ({vilnius_time.strftime('%H:%M')} Vilnius). Skipping.")
+        return
+
+    # Skip between day 20 and end of month
+    if current_day >= 20:
+        print(f"Day {current_day} — outside active days (1-19). Skipping.")
+        return
+
     try:
         auth = json.loads(AUTH_JSON)
         cookies_list = auth.get("cookies", [])
