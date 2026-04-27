@@ -78,7 +78,7 @@ async def check_slots():
             if data:
                 pct_value = float(data.replace("%", "").strip())
                 print(f"Group B: {pct_value}%")
-                if 0 < pct_value < 100:
+                if pct_value >= 0:
                     send_alert(f"🚨 SCRAMBLE: Group B is {pct_value}%! {GROUP_B_URL}")
             
         finally:
