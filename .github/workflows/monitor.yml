@@ -2,8 +2,13 @@ name: ScrambleUp Group B Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # every 10 minutes
-  workflow_dispatch:           # run manually anytime
+    - cron: '*/10 * * * *'  # Runs every 10 minutes
+  workflow_dispatch:        # Manual trigger
+
+# Prevents multiple instances from running at the same time
+concurrency:
+  group: scramble-monitor
+  cancel-in-progress: false 
 
 jobs:
   monitor:
@@ -17,12 +22,29 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip' # Automatically caches installed pip packages
 
       - name: Install Python libraries
         run: pip install requests playwright
 
-      - name: Install Playwright browser
+      # Cache Playwright browsers to save ~1 minute of download time
+      - name: Cache Playwright Browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright Chromium
+        # Only install if the cache was not hit
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: playwright install chromium --with-deps
+
+      - name: Install Playwright Dependencies (System)
+        # Browsers are cached, but system Linux libs often need a quick refresh
+        run: playwright install-deps chromium
 
       - name: Run the monitor
         env:
