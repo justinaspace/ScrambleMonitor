@@ -1,0 +1,29 @@
+name: ScrambleUp Group B Monitor
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # runs every 10 minutes, 24 hours a day
+  workflow_dispatch:           # also lets you run it manually anytime
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install required libraries
+        run: pip install requests beautifulsoup4
+
+      - name: Run the monitor
+        env:
+          SCRAMBLE_COOKIES: ${{ secrets.SCRAMBLE_COOKIES }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python monitor.py
