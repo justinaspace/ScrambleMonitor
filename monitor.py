@@ -14,15 +14,25 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GROUP_B_URL = "https://investor.scrambleup.com/investing"
 
 # ----------------------------------------------------------------
-# Telegram
+# Telegram and Discord
 # ----------------------------------------------------------------
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    # Telegram
     try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
         print("Telegram message sent.")
     except Exception as e:
         print(f"Failed to send Telegram: {e}")
+
+def send_discord(message):
+    # Discord
+    try:
+        webhook_url = os.environ["DISCORD_WEBHOOK"]
+        requests.post(webhook_url, json={"content": message})
+        print("Discord message sent.")
+    except Exception as e:
+        print(f"Failed to send Discord: {e}")
 
 # ----------------------------------------------------------------
 # Main
@@ -35,6 +45,7 @@ async def check_slots():
         print(f"Loaded {len(cookies_list)} cookies and {len(localstorage)} localStorage keys.")
     except Exception as e:
         send_telegram(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
+        send_discord(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
     async with async_playwright() as p:
@@ -80,6 +91,7 @@ async def check_slots():
             await page.goto(GROUP_B_URL, wait_until="networkidle", timeout=60000)
         except Exception as e:
             send_telegram(f"⚠️ Could not load page.\nError: {e}")
+            send_discord(f"⚠️ Could not load page.\nError: {e}")
             await browser.close()
             return
 
@@ -99,6 +111,14 @@ async def check_slots():
                 "3. Paste into GitHub Secret: SCRAMBLE_AUTH\n\n"
                 "⏸ Monitoring paused until updated."
             )
+            send_discord(
+                "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
+                "Do this to resume:\n"
+                "1. Log in to investor.scrambleup.com\n"
+                "2. Click the 'ScrambleUp Auth Export' bookmark\n"
+                "3. Paste into GitHub Secret: SCRAMBLE_AUTH\n\n"
+                "⏸ Monitoring paused until updated."
+            )            
             print("Session expired.")
             await browser.close()
             return
@@ -134,12 +154,14 @@ async def check_slots():
 
         if group_b_percentage is None:
             send_telegram("⚠️ Could not find Group B percentage. Please check manually.")
+            send_discord("⚠️ Could not find Group B percentage. Please check manually.")
             return
 
         try:
             pct_value = float(group_b_percentage.replace("%", "").strip())
         except ValueError:
             send_telegram(f"⚠️ Unexpected format: '{group_b_percentage}'")
+            send_discord(f"⚠️ Unexpected format: '{group_b_percentage}'")
             return
 
         print(f"Group B is {pct_value}% filled.")
@@ -147,6 +169,12 @@ async def check_slots():
         # ✅ Only alert when round is actively open (between 0% and 100%)
         if 0 < pct_value < 100:
             send_telegram(
+                f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
+                f"Group B investment round is OPEN!\n"
+                f"Currently {pct_value}% filled — act fast!\n\n"
+                f"👉 Invest now:\n{GROUP_B_URL}"
+            )
+            send_discord(
                 f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
                 f"Group B investment round is OPEN!\n"
                 f"Currently {pct_value}% filled — act fast!\n\n"
