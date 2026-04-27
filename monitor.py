@@ -1,118 +1,183 @@
 import os
 import json
+import asyncio
+from playwright.async_api import async_playwright
 import requests
-from bs4 import BeautifulSoup
 
 # ----------------------------------------------------------------
-# Config — all values come from GitHub Secrets (never in the code)
+# Config from GitHub Secrets
 # ----------------------------------------------------------------
 COOKIES_JSON     = os.environ["SCRAMBLE_COOKIES"]
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# ⚠️ Update this URL to the exact Group B page URL from your browser
-GROUP_B_URL = "https://investor.scrambleup.com/investing"
+GROUP_B_URL = "https://investor.scrambleup.com/investing"  # ← update to exact URL
 
 # ----------------------------------------------------------------
-# Send a Telegram message to your phone
+# Send Telegram message
 # ----------------------------------------------------------------
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+        print("Telegram message sent.")
     except Exception as e:
-        print(f"Failed to send Telegram message: {e}")
+        print(f"Failed to send Telegram: {e}")
 
 # ----------------------------------------------------------------
-# Main monitoring function
+# Main check using a real browser (handles JavaScript pages)
 # ----------------------------------------------------------------
-def check_slots():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/120.0.0.0 Safari/537.36"
-    })
-
-    # Load cookies from the GitHub Secret
+async def check_slots():
+    # Parse cookies
     try:
         cookies = json.loads(COOKIES_JSON)
-        for cookie in cookies:
-            session.cookies.set(
-                cookie["name"],
-                cookie["value"],
-                domain=cookie.get("domain", "scrambleup.com")
+        print(f"Loaded {len(cookies)} cookies.")
+    except Exception as e:
+        send_telegram(f"⚠️ ScrambleUp Monitor ERROR\nCould not parse cookies.\nError: {e}")
+        return
+
+    async with async_playwright() as p:
+        # Launch headless browser (invisible Chrome)
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0.0.0 Safari/537.36"
+        )
+
+        # Inject your cookies so you're already logged in
+        playwright_cookies = []
+        for c in cookies:
+            cookie = {
+                "name":   c.get("name", ""),
+                "value":  c.get("value", ""),
+                "domain": c.get("domain", "scrambleup.com"),
+                "path":   c.get("path", "/"),
+            }
+            # Only add optional fields if they exist and are valid
+            if c.get("secure") is not None:
+                cookie["secure"] = c["secure"]
+            if c.get("httpOnly") is not None:
+                cookie["httpOnly"] = c["httpOnly"]
+            playwright_cookies.append(cookie)
+
+        await context.add_cookies(playwright_cookies)
+
+        page = await context.new_page()
+
+        # Navigate to Group B page
+        try:
+            print(f"Loading page: {GROUP_B_URL}")
+            await page.goto(GROUP_B_URL, wait_until="networkidle", timeout=60000)
+        except Exception as e:
+            send_telegram(f"⚠️ ScrambleUp Monitor: Could not load page.\nError: {e}")
+            await browser.close()
+            return
+
+        # Check if session expired (redirected to login)
+        current_url = page.url
+        page_text = (await page.content()).lower()
+
+        logged_out_signals = ["login", "sign in", "forgot password", "enter your email"]
+        if any(kw in page_text for kw in logged_out_signals) or "login" in current_url:
+            send_telegram(
+                "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
+                "Your cookies have expired. Here is what to do:\n\n"
+                "1. Log in to scrambleup.com (full email + SMS process)\n"
+                "2. Navigate to the Group B page\n"
+                "3. Click Cookie-Editor → Export → Export as JSON\n"
+                "4. Go to GitHub → repo → Settings → Secrets\n"
+                "5. Update SCRAMBLE_COOKIES with new cookies\n\n"
+                "Monitoring is paused until you refresh cookies."
             )
-        print(f"Loaded {len(cookies)} cookies successfully.")
-    except Exception as e:
-        send_telegram(
-            f"⚠️ ScrambleUp Monitor ERROR\n\n"
-            f"Could not load cookies.\nError: {e}\n\n"
-            f"Please check your SCRAMBLE_COOKIES secret in GitHub."
-        )
-        return
+            print("Session expired — user notified.")
+            await browser.close()
+            return
 
-    # Fetch the Group B page
-    try:
-        response = session.get(GROUP_B_URL, timeout=30)
-        print(f"Page loaded. Status code: {response.status_code}")
-    except Exception as e:
-        send_telegram(f"⚠️ ScrambleUp Monitor: Could not reach the website.\nError: {e}")
-        return
+        print("Session valid. Looking for Group B percentage...")
 
-    page_text = response.text.lower()
+        # Wait for the percentage element to appear on the page
+        try:
+            await page.wait_for_selector("[class*='_percentage_']", timeout=15000)
+            print("Found percentage element.")
+        except Exception:
+            send_telegram(
+                "⚠️ ScrambleUp Monitor: Could not find Group B percentage element.\n\n"
+                "The page layout may have changed.\n"
+                "Please check scrambleup.com manually."
+            )
+            print("Percentage element not found.")
+            await browser.close()
+            return
 
-    # Check if session has expired (logged out)
-    logged_out_signals = [
-        "login", "sign in", "forgot password",
-        "enter your email", "log in to continue"
-    ]
-    if any(kw in page_text for kw in logged_out_signals):
-        send_telegram(
-            "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
-            "Your cookies have expired. Here's what to do:\n\n"
-            "1. Log in to scrambleup.com (full email + SMS process)\n"
-            "2. Go to the Group B page\n"
-            "3. Click Cookie-Editor extension → Export → Export as JSON\n"
-            "4. Go to GitHub → your repo → Settings → Secrets\n"
-            "5. Update SCRAMBLE_COOKIES with the new cookies\n\n"
-            "⏸ Monitoring is paused until you do this."
-        )
-        print("Session expired — notified user via Telegram.")
-        return
+        # Find ALL percentage elements (there may be multiple groups)
+        elements = await page.query_selector_all("[class*='_percentage_']")
+        print(f"Found {len(elements)} percentage element(s).")
 
-    print("Session is valid. Checking for open slots...")
+        group_b_percentage = None
 
-    # ----------------------------------------------------------------
-    # ⚠️ IMPORTANT: Update these keywords to match what ScrambleUp
-    # actually shows on the page when slots are open or closed.
-    # See Part 7 of the guide for how to find the right words.
-    # ----------------------------------------------------------------
-    open_keywords = [
-        "invest now", "join now", "open for investment",
-        "slots available", "available", "open"
-    ]
-    closed_keywords = [
-        "fully funded", "closed", "no slots",
-        "coming soon", "fully subscribed", "waitlist"
-    ]
+        for el in elements:
+            # For each percentage, check if "Group B" is nearby
+            # Look at the parent container for "Group B" text
+            parent = await el.evaluate_handle(
+                "node => node.closest('[class*=\"_group_\"], [class*=\"_content_\"], [class*=\"_wrapper_\"]')"
+            )
+            parent_text = ""
+            try:
+                parent_text = await parent.evaluate("node => node ? node.innerText : ''")
+            except Exception:
+                pass
 
-    found_open   = any(kw in page_text for kw in open_keywords)
-    found_closed = any(kw in page_text for kw in closed_keywords)
+            pct_text = (await el.inner_text()).strip()
+            print(f"Element text: '{pct_text}' | Parent text snippet: '{parent_text[:80]}'")
 
-    print(f"Open signals found: {found_open}")
-    print(f"Closed signals found: {found_closed}")
+            if "group b" in parent_text.lower():
+                group_b_percentage = pct_text
+                print(f"Group B percentage found: {group_b_percentage}")
+                break
 
-    if found_open and not found_closed:
-        send_telegram(
-            "🚨 SCRAMBLEUP ALERT 🚨\n\n"
-            "Group B has OPEN INVESTMENT SLOTS!\n\n"
-            "👉 Act fast — go check now:\n"
-            "https://investor.scrambleup.com/investing"
-        )
-        print("✅ OPEN SLOTS DETECTED — Telegram alert sent!")
-    else:
-        print("No open slots detected. Will check again soon.")
+        # Fallback: if only one percentage on the page, use it
+        if group_b_percentage is None and len(elements) == 1:
+            group_b_percentage = (await elements[0].inner_text()).strip()
+            print(f"Using only percentage on page: {group_b_percentage}")
 
+        await browser.close()
+
+        # ----------------------------------------------------------------
+        # Decision logic
+        # ----------------------------------------------------------------
+        if group_b_percentage is None:
+            send_telegram(
+                "⚠️ ScrambleUp Monitor: Could not identify Group B specifically.\n"
+                "Please check the page manually."
+            )
+            return
+
+        # Parse the number (remove % sign)
+        try:
+            pct_value = float(group_b_percentage.replace("%", "").strip())
+        except ValueError:
+            send_telegram(
+                f"⚠️ ScrambleUp Monitor: Unexpected percentage format: '{group_b_percentage}'\n"
+                "Please check manually."
+            )
+            return
+
+        print(f"Group B is {pct_value}% filled.")
+
+        if pct_value < 100:
+            send_telegram(
+                f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
+                f"Group B has OPEN INVESTMENT SLOTS!\n"
+                f"Currently {pct_value}% filled — slots still available.\n\n"
+                f"👉 Act fast:\n{GROUP_B_URL}"
+            )
+            print(f"ALERT SENT — Group B is only {pct_value}% full!")
+        else:
+            print("Group B is 100% full. No action needed.")
+
+# ----------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------
 if __name__ == "__main__":
-    check_slots()
+    asyncio.run(check_slots())
