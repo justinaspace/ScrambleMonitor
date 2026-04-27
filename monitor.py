@@ -96,19 +96,49 @@ async def check_slots():
 
         print("Session valid. Looking for Group B percentage...")
 
-        # Wait for the percentage element to appear on the page
+        # Wait longer for React to fully render
+        import re
+        await page.wait_for_timeout(8000)  # wait 8 seconds for JS to render
+
+        # Debug: print all class names containing 'percentage' or 'group'
+        all_classes = await page.evaluate("""
+            () => {
+                const els = document.querySelectorAll('[class]');
+                const found = [];
+                els.forEach(el => {
+                    const c = el.className;
+                    if (typeof c === 'string' && 
+                        (c.includes('percentage') || c.includes('group') || c.includes('value'))) {
+                        found.push(c + ' | text: ' + el.innerText.substring(0, 50));
+                    }
+                });
+                return found.slice(0, 20);
+            }
+        """)
+        print("Relevant elements found on page:")
+        for cls in all_classes:
+            print(" -", cls)
+
+        # Try to find percentage element
         try:
-            await page.wait_for_selector("[class*='_percentage_']", timeout=15000)
+            await page.wait_for_selector("[class*='_percentage_']", timeout=20000)
             print("Found percentage element.")
         except Exception:
-            send_telegram(
-                "⚠️ ScrambleUp Monitor: Could not find Group B percentage element.\n\n"
-                "The page layout may have changed.\n"
-                "Please check scrambleup.com manually."
-            )
-            print("Percentage element not found.")
-            await browser.close()
-            return
+            # Also try alternative selectors
+            alt_found = await page.query_selector_all("[class*='percentage']")
+            if alt_found:
+                print(f"Found {len(alt_found)} elements with 'percentage' in class (alt selector)")
+            else:
+                page_snippet = (await page.content())[:500]
+                print(f"Page start: {page_snippet}")
+                send_telegram(
+                    "⚠️ ScrambleUp Monitor: Could not find Group B percentage element.\n\n"
+                    "The page layout may have changed.\n"
+                    "Please check scrambleup.com manually."
+                )
+                print("Percentage element not found.")
+                await browser.close()
+                return
 
         # Find ALL percentage elements (there may be multiple groups)
         elements = await page.query_selector_all("[class*='_percentage_']")
