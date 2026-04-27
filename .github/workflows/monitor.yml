@@ -27,6 +27,7 @@ jobs:
       - name: Run the monitor
         env:
           SCRAMBLE_COOKIES: ${{ secrets.SCRAMBLE_COOKIES }}
+          SCRAMBLE_LOCALSTORAGE: ${{ secrets.SCRAMBLE_LOCALSTORAGE }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python monitor.py
