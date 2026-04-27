@@ -145,7 +145,7 @@ async def check_slots():
         print(f"Group B is {pct_value}% filled.")
 
         # ✅ Only alert when round is actively open (between 0% and 100%)
-        if pct_value >= 0:
+        if 0 < pct_value < 100:
             send_telegram(
                 f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
                 f"Group B investment round is OPEN!\n"
