@@ -2,8 +2,8 @@ name: ScrambleUp Group B Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # runs every 10 minutes, 24 hours a day
-  workflow_dispatch:           # also lets you run it manually anytime
+    - cron: '*/10 * * * *'   # every 10 minutes
+  workflow_dispatch:           # run manually anytime
 
 jobs:
   monitor:
@@ -18,8 +18,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install required libraries
-        run: pip install requests beautifulsoup4
+      - name: Install Python libraries
+        run: pip install requests playwright
+
+      - name: Install Playwright browser
+        run: playwright install chromium --with-deps
 
       - name: Run the monitor
         env:
