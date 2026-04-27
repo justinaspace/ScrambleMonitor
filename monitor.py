@@ -10,6 +10,7 @@ from playwright.async_api import async_playwright
 AUTH_JSON        = os.environ["SCRAMBLE_AUTH"]
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+DISCORD_WEBHOOK  = os.environ["DISCORD_WEBHOOK"]
 
 GROUP_B_URL = "https://investor.scrambleup.com/investing"
 
@@ -169,13 +170,13 @@ async def check_slots():
         # ✅ Only alert when round is actively open (between 0% and 100%)
         if pct_value >= 0:
             send_telegram(
-                f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
+                f"🚨 SCRAMBLE ALERT 🚨\n\n"
                 f"Group B investment round is OPEN!\n"
                 f"Currently {pct_value}% filled — act fast!\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
             send_discord(
-                f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
+                f"🚨 SCRAMBLE ALERT 🚨\n\n"
                 f"Group B investment round is OPEN!\n"
                 f"Currently {pct_value}% filled — act fast!\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
