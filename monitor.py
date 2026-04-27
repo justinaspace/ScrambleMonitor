@@ -30,8 +30,8 @@ def send_telegram(message):
 async def check_slots():
     try:
         auth = json.loads(AUTH_JSON)
-        cookies_list   = auth.get("cookies", [])
-        localstorage   = auth.get("localStorage", {})
+        cookies_list = auth.get("cookies", [])
+        localstorage = auth.get("localStorage", {})
         print(f"Loaded {len(cookies_list)} cookies and {len(localstorage)} localStorage keys.")
     except Exception as e:
         send_telegram(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
@@ -144,15 +144,19 @@ async def check_slots():
 
         print(f"Group B is {pct_value}% filled.")
 
-        if pct_value < 100:
+        # ✅ Only alert when round is actively open (between 0% and 100%)
+        if 0 < pct_value < 100:
             send_telegram(
                 f"🚨 SCRAMBLEUP ALERT 🚨\n\n"
-                f"Group B has OPEN SLOTS!\n"
-                f"Currently {pct_value}% filled.\n\n"
-                f"👉 Act fast:\n{GROUP_B_URL}"
+                f"Group B investment round is OPEN!\n"
+                f"Currently {pct_value}% filled — act fast!\n\n"
+                f"👉 Invest now:\n{GROUP_B_URL}"
             )
+            print(f"ALERT SENT — Group B is {pct_value}% full!")
+        elif pct_value == 0:
+            print("Group B is 0% — round not open yet. No alert.")
         else:
-            print("Group B is 100% full. No action needed.")
+            print("Group B is 100% full. No alert.")
 
 if __name__ == "__main__":
     asyncio.run(check_slots())
