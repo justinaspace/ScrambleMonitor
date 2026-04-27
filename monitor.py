@@ -171,13 +171,13 @@ async def check_slots():
         if pct_value >= 0:
             send_telegram(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
-                f"Group B investment round is OPEN!\n"
+                f"Group B investment is OPEN!\n"
                 f"Currently {pct_value}% filled — act fast!\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
             send_discord(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
-                f"Group B investment round is OPEN!\n"
+                f"Group B investment is OPEN!\n"
                 f"Currently {pct_value}% filled — act fast!\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
