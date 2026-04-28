@@ -27,7 +27,7 @@ def send_all(message):
 # Main
 # ----------------------------------------------------------------
 async def check_slots():
-    # Safety net — skip between 23:00 and 06:00 Vilnius time
+    # Safety net — skip between 23:00 and 07:00 Vilnius time
     vilnius_time = datetime.now(zoneinfo.ZoneInfo("Europe/Vilnius"))
     current_hour = vilnius_time.hour
     current_day  = vilnius_time.day
@@ -112,6 +112,8 @@ async def check_slots():
         print(f"Found {len(elements)} percentage element(s).")
 
         group_b_percentage = None
+        group_b_context    = ""
+
         for el in elements:
             try:
                 parent_text = await (await el.evaluate_handle(
@@ -125,7 +127,8 @@ async def check_slots():
 
             if "group b" in parent_text.lower():
                 group_b_percentage = pct_text
-                print(f"✅ Group B: {group_b_percentage}")
+                group_b_context    = parent_text.split("\n")[0].strip()
+                print(f"✅ Group B: {group_b_percentage} | {group_b_context}")
                 break
 
         if group_b_percentage is None and len(elements) == 1:
@@ -149,9 +152,11 @@ async def check_slots():
             send_all(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
                 f"Group B investment is OPEN!\n"
-                f"Currently {pct_value}% filled — act fast!\n\n"
+                f"Currently {pct_value}% filled — act fast!\n"
+                f"{group_b_context}\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
+            print(f"ALERT SENT — Group B is {pct_value}% full!")
         elif pct_value == 0:
             print("Group B is 0% — round not open yet. No alert.")
         else:
