@@ -9,34 +9,19 @@ from playwright.async_api import async_playwright
 # ----------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------
-AUTH_JSON        = os.environ["SCRAMBLE_AUTH"]
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-DISCORD_WEBHOOK  = os.environ["DISCORD_WEBHOOK"]
-
-GROUP_B_URL = "https://investor.scrambleup.com/investing"
+AUTH_JSON       = os.environ["SCRAMBLE_AUTH"]
+DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 
 # ----------------------------------------------------------------
-# Notifications
+# Notification
 # ----------------------------------------------------------------
-def send_telegram(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-        print("Telegram message sent.")
-    except Exception as e:
-        print(f"Failed to send Telegram: {e}")
-
-def send_discord(message):
+def send_all(message):
     try:
         requests.post(DISCORD_WEBHOOK, json={"content": message})
         print("Discord message sent.")
     except Exception as e:
         print(f"Failed to send Discord: {e}")
-
-def send_all(message):
-    send_telegram(message)
-    send_discord(message)
 
 # ----------------------------------------------------------------
 # Main
@@ -44,16 +29,15 @@ def send_all(message):
 async def check_slots():
     # Skip between 23:00 and 06:00 Vilnius time
     vilnius_time = datetime.now(zoneinfo.ZoneInfo("Europe/Vilnius"))
-    current_hour = vilnius_time.hour
-    if current_hour >= 23 or current_hour < 6:
+    if vilnius_time.hour >= 23 or vilnius_time.hour < 6:
         print(f"Outside active hours ({vilnius_time.strftime('%H:%M')} Vilnius). Skipping.")
         return
 
-    print(f"Active hours check passed ({vilnius_time.strftime('%H:%M')} Vilnius). Running monitor...")
+    print(f"Running at {vilnius_time.strftime('%H:%M')} Vilnius...")
 
     # Load auth
     try:
-        auth = json.loads(AUTH_JSON)
+        auth         = json.loads(AUTH_JSON)
         cookies_list = auth.get("cookies", [])
         localstorage = auth.get("localStorage", {})
         print(f"Loaded {len(cookies_list)} cookies and {len(localstorage)} localStorage keys.")
@@ -70,34 +54,24 @@ async def check_slots():
         )
 
         # Inject cookies
-        playwright_cookies = []
-        for c in cookies_list:
-            if c.get("name") and c.get("value"):
-                playwright_cookies.append({
-                    "name":   c["name"],
-                    "value":  c["value"],
-                    "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
-                    "path":   c.get("path", "/"),
-                })
+        playwright_cookies = [
+            {"name": c["name"], "value": c["value"],
+             "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
+             "path": c.get("path", "/")}
+            for c in cookies_list if c.get("name") and c.get("value")
+        ]
         if playwright_cookies:
             await context.add_cookies(playwright_cookies)
-            print(f"Injected {len(playwright_cookies)} cookies.")
 
         page = await context.new_page()
 
-        # Go to domain first to set localStorage
+        # Set localStorage
         await page.goto("https://investor.scrambleup.com", wait_until="domcontentloaded", timeout=30000)
-
-        # Inject localStorage
         if localstorage:
-            await page.evaluate("""
-                (data) => {
-                    for (const [key, value] of Object.entries(data)) {
-                        localStorage.setItem(key, value);
-                    }
-                }
-            """, localstorage)
-            print(f"Injected {len(localstorage)} localStorage items.")
+            await page.evaluate(
+                "(data) => { for (const [k,v] of Object.entries(data)) localStorage.setItem(k,v); }",
+                localstorage
+            )
 
         # Navigate to investing page
         try:
@@ -107,39 +81,40 @@ async def check_slots():
             await browser.close()
             return
 
-        await page.wait_for_timeout(8000)
-
-        current_url = page.url
-        page_text   = (await page.content()).lower()
-        print(f"Current URL: {current_url}")
+        # Reduce fixed wait from 8s to 3s
+        await page.wait_for_timeout(3000)
+        print(f"Current URL: {page.url}")
 
         # Check if logged out
-        if "login" in current_url or ("sign in" in page_text and "logout" not in page_text):
+        page_text = (await page.content()).lower()
+        if "login" in page.url or ("sign in" in page_text and "logout" not in page_text):
             send_all(
                 "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
                 "Do this to resume:\n"
                 "1. Log in to investor.scrambleup.com\n"
-                "2. Click the 'ScrambleUp Auth Export' bookmark\n"
-                "3. Paste into GitHub Secret: SCRAMBLE_AUTH\n\n"
-                "⏸ Monitoring paused until updated."
+                "2. Click 'ScrambleUp Auth Export' bookmark\n"
+                "3. Paste into GitHub Secret: SCRAMBLE_AUTH"
             )
-            print("Session expired.")
             await browser.close()
             return
 
-        # Find Group B percentage
-        await page.wait_for_timeout(2000)
+        # Smart wait — wait until percentage element appears
+        try:
+            await page.wait_for_selector("[class*='_percentage_']", timeout=15000)
+        except Exception:
+            send_all("⚠️ Could not find Group B percentage. Please check manually.")
+            await browser.close()
+            return
+
         elements = await page.query_selector_all("[class*='_percentage_']")
         print(f"Found {len(elements)} percentage element(s).")
 
         group_b_percentage = None
-
         for el in elements:
             try:
-                parent_handle = await el.evaluate_handle(
+                parent_text = await (await el.evaluate_handle(
                     "node => node.closest('[class*=\"_group_\"]')"
-                )
-                parent_text = await parent_handle.evaluate("node => node ? node.innerText : ''")
+                )).evaluate("node => node ? node.innerText : ''")
             except Exception:
                 parent_text = ""
 
@@ -168,7 +143,6 @@ async def check_slots():
 
         print(f"Group B is {pct_value}% filled.")
 
-        # Alert only when round is actively open (between 0% and 100%)
         if 0 < pct_value < 100:
             send_all(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
@@ -176,7 +150,6 @@ async def check_slots():
                 f"Currently {pct_value}% filled — act fast!\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
-            print(f"ALERT SENT — Group B is {pct_value}% full!")
         elif pct_value == 0:
             print("Group B is 0% — round not open yet. No alert.")
         else:
