@@ -8,27 +8,26 @@ on:
     - cron: '5 13 21-31 * *'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Cache Playwright browser
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium
-
       - name: Install dependencies
         run: |
           pip install requests playwright
           playwright install chromium --with-deps
-
       - name: Run monitor
         env:
           SCRAMBLE_AUTH: ${{ secrets.SCRAMBLE_AUTH }}
