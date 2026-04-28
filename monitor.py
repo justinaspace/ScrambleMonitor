@@ -1,186 +1,150 @@
 import os
 import json
 import asyncio
+import logging
 import requests
-from datetime import datetime
-import zoneinfo
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # ----------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------
-AUTH_JSON       = os.environ["SCRAMBLE_AUTH"]
-DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
+BASE_URL        = "https://investor.scrambleup.com"
+USER_AGENT      = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 # ----------------------------------------------------------------
-# Notification
+# Discord
 # ----------------------------------------------------------------
 def send_all(message):
+    logging.info(message)
+    if not DISCORD_WEBHOOK:
+        logging.warning("No DISCORD_WEBHOOK configured.")
+        return
     try:
-        requests.post(DISCORD_WEBHOOK, json={"content": message})
-        print("Discord message sent.")
+        requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
+        logging.info("Discord sent.")
     except Exception as e:
-        print(f"Failed to send Discord: {e}")
+        logging.error("Discord failed: %s", e)
 
 # ----------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------
-async def check_slots():
-    vilnius_time   = datetime.now(zoneinfo.ZoneInfo("Europe/Vilnius"))
-    current_hour   = vilnius_time.hour
-    current_minute = vilnius_time.minute
-    current_day    = vilnius_time.day
-
-    # ── Night skip (all days) ──────────────────────────────────
-    if current_hour >= 23 or current_hour < 7:
-        print(f"Outside active hours ({vilnius_time.strftime('%H:%M')} Vilnius). Skipping.")
-        return
-
-    # ── Day 1-16: run every 10 min — no extra restriction ─────
-    if 1 <= current_day <= 16:
-        print(f"Day {current_day} — running every 10 min.")
-
-    # ── Day 17-20: run every 60 min only ──────────────────────
-    elif 17 <= current_day <= 20:
-        if current_minute != 0:
-            print(f"Day {current_day} — 60 min schedule, skipping at :{current_minute:02d}.")
-            return
-        print(f"Day {current_day} — running every 60 min.")
-
-    # ── Day 21-31: run only at 07:00 and 15:00 ────────────────
-    elif current_day >= 21:
-        if not (current_hour == 7 and current_minute == 0) and \
-           not (current_hour == 15 and current_minute == 0):
-            print(f"Day {current_day} — 2x daily schedule, skipping at {vilnius_time.strftime('%H:%M')}.")
-            return
-        print(f"Day {current_day} — running 2x daily at {vilnius_time.strftime('%H:%M')}.")
-
-    print(f"Running at {vilnius_time.strftime('%H:%M')} Vilnius, day {current_day}...")
+async def run_test():
+    logging.info("=== TEST RUN — no schedule logic, alerts at any % ===")
 
     # Load auth
     try:
         auth         = json.loads(AUTH_JSON)
         cookies_list = auth.get("cookies", [])
         localstorage = auth.get("localStorage", {})
-        print(f"Loaded {len(cookies_list)} cookies and {len(localstorage)} localStorage keys.")
+        logging.info("Loaded %d cookies, %d localStorage keys.", len(cookies_list), len(localstorage))
     except Exception as e:
-        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
+        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH.\nError: {e}")
         return
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36"
-        )
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        context = await browser.new_context(user_agent=USER_AGENT)
 
-        # Inject cookies
-        playwright_cookies = [
-            {"name": c["name"], "value": c["value"],
-             "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
-             "path": c.get("path", "/")}
-            for c in cookies_list if c.get("name") and c.get("value")
-        ]
-        if playwright_cookies:
-            await context.add_cookies(playwright_cookies)
-
-        page = await context.new_page()
-
-        # Set localStorage
-        await page.goto("https://investor.scrambleup.com", wait_until="domcontentloaded", timeout=30000)
-        if localstorage:
-            await page.evaluate(
-                "(data) => { for (const [k,v] of Object.entries(data)) localStorage.setItem(k,v); }",
-                localstorage
-            )
-
-        # Navigate to investing page
         try:
-            await page.goto(GROUP_B_URL, wait_until="networkidle", timeout=60000)
-        except Exception as e:
-            send_all(f"⚠️ Could not load page.\nError: {e}")
-            await browser.close()
-            return
+            # Inject cookies
+            cookies = [
+                {
+                    "name":   c["name"],
+                    "value":  c["value"],
+                    "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
+                    "path":   c.get("path", "/"),
+                }
+                for c in cookies_list if c.get("name") and c.get("value")
+            ]
+            if cookies:
+                await context.add_cookies(cookies)
 
-        await page.wait_for_timeout(3000)
-        print(f"Current URL: {page.url}")
+            page = await context.new_page()
 
-        # Check if logged out
-        page_text = (await page.content()).lower()
-        if "login" in page.url or ("sign in" in page_text and "logout" not in page_text):
-            send_all(
-                "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
-                "Do this to resume:\n"
-                "1. Log in to investor.scrambleup.com\n"
-                "2. Click 'ScrambleUp Auth Export' bookmark\n"
-                "3. Paste into GitHub Secret: SCRAMBLE_AUTH"
-            )
-            await browser.close()
-            return
+            # Set localStorage
+            await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+            if localstorage:
+                await page.evaluate(
+                    "(data) => { for (const [k,v] of Object.entries(data)) localStorage.setItem(k,v); }",
+                    localstorage,
+                )
 
-        # Smart wait for percentage element
-        try:
-            await page.wait_for_selector("[class*='_percentage_']", timeout=15000)
-        except Exception:
-            send_all("⚠️ Could not find Group B percentage. Please check manually.")
-            await browser.close()
-            return
-
-        elements = await page.query_selector_all("[class*='_percentage_']")
-        print(f"Found {len(elements)} percentage element(s).")
-
-        group_b_percentage = None
-        group_b_context    = ""
-
-        for el in elements:
+            # Load investing page
+            await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
             try:
-                parent_text = await (await el.evaluate_handle(
-                    "node => node.closest('[class*=\"_group_\"]')"
-                )).evaluate("node => node ? node.innerText : ''")
-            except Exception:
-                parent_text = ""
+                await page.wait_for_load_state("networkidle", timeout=15000)
+            except PlaywrightTimeoutError:
+                logging.warning("networkidle timeout — continuing anyway.")
 
-            pct_text = (await el.inner_text()).strip()
-            print(f"Percentage: '{pct_text}' | Context: '{parent_text[:60]}'")
+            await page.wait_for_timeout(2000)
+            logging.info("Current URL: %s", page.url)
 
-            if "group b" in parent_text.lower():
-                group_b_percentage = pct_text
-                group_b_context    = parent_text.split("\n")[0].strip()
-                print(f"✅ Group B: {group_b_percentage} | {group_b_context}")
+            # Session check
+            page_text = (await page.content()).lower()
+            if "login" in page.url.lower() or ("sign in" in page_text and "logout" not in page_text):
+                send_all(
+                    "🔐 SESSION EXPIRED\n\n"
+                    "1. Log in to investor.scrambleup.com\n"
+                    "2. Click 'ScrambleUp Auth Export' bookmark\n"
+                    "3. Paste into GitHub Secret: SCRAMBLE_AUTH"
+                )
+                return
+
+            # Find Group B
+            await page.wait_for_selector('[class*="_group_"]', timeout=20000)
+            groups = await page.query_selector_all('[class*="_group_"]')
+            logging.info("Found %d group element(s).", len(groups))
+
+            pct_text      = None
+            group_context = "Group B"
+
+            for group in groups:
+                text = (await group.inner_text()).strip()
+                if "group b" not in text.lower():
+                    continue
+                pct_el = await group.query_selector('[class*="_percentage_"]')
+                if not pct_el:
+                    continue
+                pct_text      = (await pct_el.inner_text()).strip()
+                group_context = text.splitlines()[0].strip()
+                logging.info("Group B found: %s | %s", pct_text, group_context)
                 break
 
-        if group_b_percentage is None and len(elements) == 1:
-            group_b_percentage = (await elements[0].inner_text()).strip()
+            # Single element fallback
+            if pct_text is None:
+                all_pcts = await page.query_selector_all('[class*="_percentage_"]')
+                if len(all_pcts) == 1:
+                    pct_text = (await all_pcts[0].inner_text()).strip()
+                    logging.info("Fallback: single percentage element found: %s", pct_text)
 
-        await browser.close()
+            if pct_text is None:
+                send_all("⚠️ Could not find Group B percentage. Check manually.")
+                return
 
-        if group_b_percentage is None:
-            send_all("⚠️ Could not find Group B percentage. Please check manually.")
-            return
+            pct_value = float(pct_text.replace("%", "").strip())
+            logging.info("Group B is %.1f%% filled.", pct_value)
 
-        try:
-            pct_value = float(group_b_percentage.replace("%", "").strip())
-        except ValueError:
-            send_all(f"⚠️ Unexpected format: '{group_b_percentage}'")
-            return
-
-        print(f"Group B is {pct_value}% filled.")
-
-        if 0 <= pct_value < 100:
+            # Always alert in test mode
             send_all(
-                f"🚨 SCRAMBLE ALERT 🚨\n\n"
-                f"🙂 Group B investment is OPEN!\n"
-                f"📈 Currently **{pct_value}%** filled ⚡\n"
-                f"💶 {group_b_context}\n\n"
-                f"👉 Invest now:\n{GROUP_B_URL}"
+                f"🧪 TEST ALERT\n\n"
+                f"📈 Group B is **{pct_value}%** filled\n"
+                f"💶 {group_context}\n\n"
+                f"👉 {GROUP_B_URL}"
             )
-            print(f"ALERT SENT — Group B is {pct_value}% full!")
-        elif pct_value == 0:
-            print("Group B is 0% — round not open yet. No alert.")
-        else:
-            print("Group B is 100% full. No alert.")
+
+        except Exception as e:
+            send_all(f"⚠️ Crash: {str(e)[:200]}")
+        finally:
+            await browser.close()
 
 if __name__ == "__main__":
-    asyncio.run(check_slots())
+    asyncio.run(run_test())
