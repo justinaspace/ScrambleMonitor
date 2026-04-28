@@ -151,9 +151,9 @@ async def check_slots():
         if pct_value >= 0:
             send_all(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
-                f"Group B investment is OPEN!\n"
-                f"Currently {pct_value}% filled — act fast!\n"
-                f"{group_b_context}\n\n"
+                f"🙂 Group B investment is OPEN!\n"
+                f"📈 Currently **{pct_value}%** filled ⚡\n"
+                f"💶 {group_b_context}\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
             print(f"ALERT SENT — Group B is {pct_value}% full!")
