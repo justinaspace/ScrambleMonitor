@@ -2,6 +2,8 @@ import os
 import json
 import asyncio
 import requests
+from datetime import datetime
+import zoneinfo
 from playwright.async_api import async_playwright
 
 # ----------------------------------------------------------------
@@ -15,10 +17,9 @@ DISCORD_WEBHOOK  = os.environ["DISCORD_WEBHOOK"]
 GROUP_B_URL = "https://investor.scrambleup.com/investing"
 
 # ----------------------------------------------------------------
-# Telegram and Discord
+# Notifications
 # ----------------------------------------------------------------
 def send_telegram(message):
-    # Telegram
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
@@ -27,42 +28,37 @@ def send_telegram(message):
         print(f"Failed to send Telegram: {e}")
 
 def send_discord(message):
-    # Discord
     try:
-        webhook_url = os.environ["DISCORD_WEBHOOK"]
-        requests.post(webhook_url, json={"content": message})
+        requests.post(DISCORD_WEBHOOK, json={"content": message})
         print("Discord message sent.")
     except Exception as e:
         print(f"Failed to send Discord: {e}")
+
+def send_all(message):
+    send_telegram(message)
+    send_discord(message)
 
 # ----------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------
 async def check_slots():
-   # Skip outside active hours (22:00 - 07:00 Vilnius time)
-    from datetime import datetime
-    import zoneinfo
+    # Skip between 23:00 and 06:00 Vilnius time
     vilnius_time = datetime.now(zoneinfo.ZoneInfo("Europe/Vilnius"))
     current_hour = vilnius_time.hour
-    current_day  = vilnius_time.day
-
-    if current_hour >= 22 or current_hour < 7:
+    if current_hour >= 23 or current_hour < 6:
         print(f"Outside active hours ({vilnius_time.strftime('%H:%M')} Vilnius). Skipping.")
         return
 
-    # Skip between day 20 and end of month
-    if current_day >= 20:
-        print(f"Day {current_day} — outside active days (1-19). Skipping.")
-        return
+    print(f"Active hours check passed ({vilnius_time.strftime('%H:%M')} Vilnius). Running monitor...")
 
+    # Load auth
     try:
         auth = json.loads(AUTH_JSON)
         cookies_list = auth.get("cookies", [])
         localstorage = auth.get("localStorage", {})
         print(f"Loaded {len(cookies_list)} cookies and {len(localstorage)} localStorage keys.")
     except Exception as e:
-        send_telegram(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
-        send_discord(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
+        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
     async with async_playwright() as p:
@@ -107,8 +103,7 @@ async def check_slots():
         try:
             await page.goto(GROUP_B_URL, wait_until="networkidle", timeout=60000)
         except Exception as e:
-            send_telegram(f"⚠️ Could not load page.\nError: {e}")
-            send_discord(f"⚠️ Could not load page.\nError: {e}")
+            send_all(f"⚠️ Could not load page.\nError: {e}")
             await browser.close()
             return
 
@@ -120,7 +115,7 @@ async def check_slots():
 
         # Check if logged out
         if "login" in current_url or ("sign in" in page_text and "logout" not in page_text):
-            send_telegram(
+            send_all(
                 "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
                 "Do this to resume:\n"
                 "1. Log in to investor.scrambleup.com\n"
@@ -128,14 +123,6 @@ async def check_slots():
                 "3. Paste into GitHub Secret: SCRAMBLE_AUTH\n\n"
                 "⏸ Monitoring paused until updated."
             )
-            send_discord(
-                "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
-                "Do this to resume:\n"
-                "1. Log in to investor.scrambleup.com\n"
-                "2. Click the 'ScrambleUp Auth Export' bookmark\n"
-                "3. Paste into GitHub Secret: SCRAMBLE_AUTH\n\n"
-                "⏸ Monitoring paused until updated."
-            )            
             print("Session expired.")
             await browser.close()
             return
@@ -170,28 +157,20 @@ async def check_slots():
         await browser.close()
 
         if group_b_percentage is None:
-            send_telegram("⚠️ Could not find Group B percentage. Please check manually.")
-            send_discord("⚠️ Could not find Group B percentage. Please check manually.")
+            send_all("⚠️ Could not find Group B percentage. Please check manually.")
             return
 
         try:
             pct_value = float(group_b_percentage.replace("%", "").strip())
         except ValueError:
-            send_telegram(f"⚠️ Unexpected format: '{group_b_percentage}'")
-            send_discord(f"⚠️ Unexpected format: '{group_b_percentage}'")
+            send_all(f"⚠️ Unexpected format: '{group_b_percentage}'")
             return
 
         print(f"Group B is {pct_value}% filled.")
 
-        # ✅ Only alert when round is actively open (between 0% and 100%)
+        # Alert only when round is actively open (between 0% and 100%)
         if 0 < pct_value < 100:
-            send_telegram(
-                f"🚨 SCRAMBLE ALERT 🚨\n\n"
-                f"Group B investment is OPEN!\n"
-                f"Currently {pct_value}% filled — act fast!\n\n"
-                f"👉 Invest now:\n{GROUP_B_URL}"
-            )
-            send_discord(
+            send_all(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
                 f"Group B investment is OPEN!\n"
                 f"Currently {pct_value}% filled — act fast!\n\n"
