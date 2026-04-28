@@ -2,30 +2,30 @@ name: ScrambleUp Group B Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'      # every 10 min all day
-    - cron: '*/5 10-11 * * *'   # every 5 min during 12:00-13:00 Vilnius (UTC 10-11)
+    - cron: '*/10 * * * *'
+    - cron: '*/5 10-11 * * *'
   workflow_dispatch:
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Python libraries
-        run: pip install requests playwright
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium
 
-      - name: Install Playwright browser
-        run: playwright install chromium --with-deps
+      - name: Install dependencies
+        run: pip install requests playwright && playwright install chromium --with-deps
 
-      - name: Run the monitor
+      - name: Run monitor
         env:
           SCRAMBLE_AUTH: ${{ secrets.SCRAMBLE_AUTH }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
