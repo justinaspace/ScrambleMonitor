@@ -147,7 +147,7 @@ async def check_slots():
             send_all(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
                 f"Group B investment is OPEN!\n"
-                f"Currently {pct_value}% filled — act fast!\n\n"
+                f"Currently {pct_value}% filled.\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
         elif pct_value == 0:
