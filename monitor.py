@@ -42,8 +42,6 @@ def send_all(message: str) -> None:
 
 # ----------------------------------------------------------------
 # Schedule logic
-# NOTE: Day 21-31 rule removed for testing.
-#       0% alert suppression removed for testing.
 # ----------------------------------------------------------------
 def should_run_now(now: datetime) -> bool:
     h, m, d = now.hour, now.minute, now.day
@@ -63,9 +61,14 @@ def should_run_now(now: datetime) -> bool:
         logging.info("Day %s — running every 60 min.", d)
         return True
 
-    # Day 21-31: always run (testing — remove this and restore 2x daily rule after)
-    logging.info("Day %s — running (21-31 rule disabled for testing).", d)
-    return True
+    if 21 <= d <= 31:
+        if not ((h == 7 and m == 0) or (h == 15 and m == 0)):
+            logging.info("Day %s — 2x daily schedule, skipping at %s.", d, now.strftime("%H:%M"))
+            return False
+        logging.info("Day %s — running 2x daily at %s.", d, now.strftime("%H:%M"))
+        return True
+
+    return False
 
 # ----------------------------------------------------------------
 # Auth
@@ -196,8 +199,9 @@ async def check_slots():
 
             logging.info("Group B is %.1f%% filled.", pct_value)
 
-            # Alert on anything under 100% including 0% (testing)
-            if pct_value < 100:
+            if pct_value == 0:
+                logging.info("Group B is 0%% — round not open yet. No alert.")
+            elif 0 < pct_value < 100:
                 context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
                 send_all(
                     f"🚨 SCRAMBLE ALERT 🚨\n\n"
