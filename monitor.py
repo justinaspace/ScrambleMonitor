@@ -2,6 +2,8 @@ import os
 import json
 import asyncio
 import requests
+from datetime import datetime
+import zoneinfo
 from playwright.async_api import async_playwright
 
 # ----------------------------------------------------------------
@@ -25,13 +27,16 @@ def send_all(message):
 # Main
 # ----------------------------------------------------------------
 async def check_slots():
-    # Skip between 23:00 and 06:00 Vilnius time
+    # Safety net — skip between 23:00 and 06:00 Vilnius time
     vilnius_time = datetime.now(zoneinfo.ZoneInfo("Europe/Vilnius"))
-    if vilnius_time.hour >= 23 or vilnius_time.hour < 6:
+    current_hour = vilnius_time.hour
+    current_day  = vilnius_time.day
+
+    if current_hour >= 23 or current_hour < 6:
         print(f"Outside active hours ({vilnius_time.strftime('%H:%M')} Vilnius). Skipping.")
         return
 
-    print(f"Running at {vilnius_time.strftime('%H:%M')} Vilnius...")
+    print(f"Running at {vilnius_time.strftime('%H:%M')} Vilnius, day {current_day}...")
 
     # Load auth
     try:
@@ -79,7 +84,6 @@ async def check_slots():
             await browser.close()
             return
 
-        # Reduce fixed wait from 8s to 3s
         await page.wait_for_timeout(3000)
         print(f"Current URL: {page.url}")
 
@@ -96,7 +100,7 @@ async def check_slots():
             await browser.close()
             return
 
-        # Smart wait — wait until percentage element appears
+        # Smart wait for percentage element
         try:
             await page.wait_for_selector("[class*='_percentage_']", timeout=15000)
         except Exception:
@@ -145,7 +149,7 @@ async def check_slots():
             send_all(
                 f"🚨 SCRAMBLE ALERT 🚨\n\n"
                 f"Group B investment is OPEN!\n"
-                f"Currently {pct_value}% filled.\n\n"
+                f"Currently {pct_value}% filled — act fast!\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
         elif pct_value == 0:
