@@ -3,6 +3,9 @@ import json
 import asyncio
 import logging
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # ----------------------------------------------------------------
@@ -12,42 +15,140 @@ AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 BASE_URL        = "https://investor.scrambleup.com"
+TZ              = ZoneInfo("Europe/Vilnius")
 USER_AGENT      = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
 
 # ----------------------------------------------------------------
-# Discord
+# Notification
 # ----------------------------------------------------------------
-def send_all(message):
+def send_all(message: str) -> None:
     logging.info(message)
     if not DISCORD_WEBHOOK:
         logging.warning("No DISCORD_WEBHOOK configured.")
         return
     try:
         requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
-        logging.info("Discord sent.")
     except Exception as e:
-        logging.error("Discord failed: %s", e)
+        logging.error("Failed to send Discord: %s", e)
+
+# ----------------------------------------------------------------
+# Schedule logic
+# NOTE: Day 21-31 rule removed for testing.
+#       0% alert suppression removed for testing.
+# ----------------------------------------------------------------
+def should_run_now(now: datetime) -> bool:
+    h, m, d = now.hour, now.minute, now.day
+
+    if h >= 23 or h < 7:
+        logging.info("Night skip: %s Vilnius. Sleeping.", now.strftime("%H:%M"))
+        return False
+
+    if 1 <= d <= 16:
+        logging.info("Day %s — running every 10 min.", d)
+        return True
+
+    if 17 <= d <= 20:
+        if m != 0:
+            logging.info("Day %s — 60 min schedule, skipping at :%02d.", d, m)
+            return False
+        logging.info("Day %s — running every 60 min.", d)
+        return True
+
+    # Day 21-31: always run (testing — remove this and restore 2x daily rule after)
+    logging.info("Day %s — running (21-31 rule disabled for testing).", d)
+    return True
+
+# ----------------------------------------------------------------
+# Auth
+# ----------------------------------------------------------------
+def parse_auth():
+    auth = json.loads(AUTH_JSON)
+    return auth.get("cookies", []), auth.get("localStorage", {})
+
+# ----------------------------------------------------------------
+# Browser helpers
+# ----------------------------------------------------------------
+async def setup_page(context, cookies_list, localstorage):
+    cookies = [
+        {
+            "name":   c["name"],
+            "value":  c["value"],
+            "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
+            "path":   c.get("path", "/"),
+        }
+        for c in cookies_list if c.get("name") and c.get("value")
+    ]
+    if cookies:
+        await context.add_cookies(cookies)
+        logging.info("Injected %d cookies.", len(cookies))
+
+    page = await context.new_page()
+    await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+
+    if localstorage:
+        await page.evaluate(
+            "(data) => { for (const [k,v] of Object.entries(data)) localStorage.setItem(k,v); }",
+            localstorage,
+        )
+        logging.info("Injected %d localStorage keys.", len(localstorage))
+
+    return page
+
+async def get_group_b(page):
+    group_selector      = '[class*="_group_"]'
+    percentage_selector = '[class*="_percentage_"]'
+
+    await page.wait_for_selector(group_selector, timeout=20000)
+    groups = await page.query_selector_all(group_selector)
+    logging.info("Found %d group element(s).", len(groups))
+
+    for group in groups:
+        text = (await group.inner_text()).strip()
+        if "group b" not in text.lower():
+            continue
+        pct_el = await group.query_selector(percentage_selector)
+        if not pct_el:
+            continue
+        pct_text = (await pct_el.inner_text()).strip()
+        logging.info("Group B found: %s | %s", pct_text, text[:60])
+        return pct_text, text
+
+    # Fallback: single percentage element on page
+    all_pcts = await page.query_selector_all(percentage_selector)
+    if len(all_pcts) == 1:
+        logging.info("Fallback: using single percentage element.")
+        pct_text = (await all_pcts[0].inner_text()).strip()
+        return pct_text, ""
+
+    return None, None
 
 # ----------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------
-async def run_test():
-    logging.info("=== TEST RUN — no schedule logic, alerts at any % ===")
+async def check_slots():
+    now = datetime.now(TZ)
+    if not should_run_now(now):
+        return
 
-    # Load auth
+    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
+
     try:
-        auth         = json.loads(AUTH_JSON)
-        cookies_list = auth.get("cookies", [])
-        localstorage = auth.get("localStorage", {})
-        logging.info("Loaded %d cookies, %d localStorage keys.", len(cookies_list), len(localstorage))
+        cookies_list, localstorage = parse_auth()
+        logging.info(
+            "Loaded %d cookies and %d localStorage keys.",
+            len(cookies_list), len(localstorage)
+        )
     except Exception as e:
-        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH.\nError: {e}")
+        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
     async with async_playwright() as p:
@@ -55,30 +156,8 @@ async def run_test():
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            # Inject cookies
-            cookies = [
-                {
-                    "name":   c["name"],
-                    "value":  c["value"],
-                    "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
-                    "path":   c.get("path", "/"),
-                }
-                for c in cookies_list if c.get("name") and c.get("value")
-            ]
-            if cookies:
-                await context.add_cookies(cookies)
+            page = await setup_page(context, cookies_list, localstorage)
 
-            page = await context.new_page()
-
-            # Set localStorage
-            await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
-            if localstorage:
-                await page.evaluate(
-                    "(data) => { for (const [k,v] of Object.entries(data)) localStorage.setItem(k,v); }",
-                    localstorage,
-                )
-
-            # Load investing page
             await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
             try:
                 await page.wait_for_load_state("networkidle", timeout=15000)
@@ -90,61 +169,51 @@ async def run_test():
 
             # Session check
             page_text = (await page.content()).lower()
-            if "login" in page.url.lower() or ("sign in" in page_text and "logout" not in page_text):
+            if "login" in page.url.lower() or (
+                "sign in" in page_text and "logout" not in page_text
+            ):
                 send_all(
-                    "🔐 SESSION EXPIRED\n\n"
+                    "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
+                    "Do this to resume:\n"
                     "1. Log in to investor.scrambleup.com\n"
                     "2. Click 'ScrambleUp Auth Export' bookmark\n"
                     "3. Paste into GitHub Secret: SCRAMBLE_AUTH"
                 )
                 return
 
-            # Find Group B
-            await page.wait_for_selector('[class*="_group_"]', timeout=20000)
-            groups = await page.query_selector_all('[class*="_group_"]')
-            logging.info("Found %d group element(s).", len(groups))
-
-            pct_text      = None
-            group_context = "Group B"
-
-            for group in groups:
-                text = (await group.inner_text()).strip()
-                if "group b" not in text.lower():
-                    continue
-                pct_el = await group.query_selector('[class*="_percentage_"]')
-                if not pct_el:
-                    continue
-                pct_text      = (await pct_el.inner_text()).strip()
-                group_context = text.splitlines()[0].strip()
-                logging.info("Group B found: %s | %s", pct_text, group_context)
-                break
-
-            # Single element fallback
-            if pct_text is None:
-                all_pcts = await page.query_selector_all('[class*="_percentage_"]')
-                if len(all_pcts) == 1:
-                    pct_text = (await all_pcts[0].inner_text()).strip()
-                    logging.info("Fallback: single percentage element found: %s", pct_text)
+            # Extract percentage
+            pct_text, group_b_context = await get_group_b(page)
 
             if pct_text is None:
-                send_all("⚠️ Could not find Group B percentage. Check manually.")
+                send_all("⚠️ Could not find Group B percentage. Please check manually.")
                 return
 
-            pct_value = float(pct_text.replace("%", "").strip())
+            try:
+                pct_value = float(pct_text.replace("%", "").strip())
+            except ValueError:
+                send_all(f"⚠️ Unexpected percentage format: '{pct_text}'")
+                return
+
             logging.info("Group B is %.1f%% filled.", pct_value)
 
-            # Always alert in test mode
-            send_all(
-                f"🧪 TEST ALERT\n\n"
-                f"📈 Group B is **{pct_value}%** filled\n"
-                f"💶 {group_context}\n\n"
-                f"👉 {GROUP_B_URL}"
-            )
+            # Alert on anything under 100% including 0% (testing)
+            if pct_value < 100:
+                context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
+                send_all(
+                    f"🚨 SCRAMBLE ALERT 🚨\n\n"
+                    f"🙂 Group B investment is OPEN!\n"
+                    f"📈 Currently **{pct_value}%** filled ⚡\n"
+                    f"💶 {context_line}\n\n"
+                    f"👉 Invest now:\n{GROUP_B_URL}"
+                )
+                logging.info("ALERT SENT — Group B is %.1f%% full.", pct_value)
+            else:
+                logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all(f"⚠️ Crash: {str(e)[:200]}")
+            send_all(f"⚠️ Monitor Crash: {str(e)[:200]}")
         finally:
             await browser.close()
 
 if __name__ == "__main__":
-    asyncio.run(run_test())
+    asyncio.run(check_slots())
