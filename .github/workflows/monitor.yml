@@ -2,8 +2,9 @@ name: ScrambleUp Group B Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # every 10 minutes
-  workflow_dispatch:           # run manually anytime
+    - cron: '*/10 * * * *'      # every 10 min all day
+    - cron: '*/5 10-11 * * *'   # every 5 min during 12:00-13:00 Vilnius (UTC 10-11)
+  workflow_dispatch:
 
 jobs:
   monitor:
