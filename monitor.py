@@ -41,19 +41,20 @@ async def check_slots():
     if 1 <= current_day <= 16:
         print(f"Day {current_day} — running every 10 min.")
 
-    # ── Day 17-20: run every 30 min only ──────────────────────
+    # ── Day 17-20: run every 60 min only ──────────────────────
     elif 17 <= current_day <= 20:
-        if current_minute not in [0, 30]:
-            print(f"Day {current_day} — 30 min schedule, skipping at :{current_minute:02d}.")
+        if current_minute != 0:
+            print(f"Day {current_day} — 60 min schedule, skipping at :{current_minute:02d}.")
             return
-        print(f"Day {current_day} — running every 30 min.")
+        print(f"Day {current_day} — running every 60 min.")
 
-    # ── Day 21-31: run every 2 hours only ─────────────────────
+    # ── Day 21-31: run only at 07:00 and 15:00 ────────────────
     elif current_day >= 21:
-        if current_minute != 0 or current_hour % 2 != 1:
-            print(f"Day {current_day} — 2 hour schedule, skipping at {vilnius_time.strftime('%H:%M')}.")
+        if not (current_hour == 7 and current_minute == 0) and \
+           not (current_hour == 15 and current_minute == 0):
+            print(f"Day {current_day} — 2x daily schedule, skipping at {vilnius_time.strftime('%H:%M')}.")
             return
-        print(f"Day {current_day} — running every 2 hours.")
+        print(f"Day {current_day} — running 2x daily at {vilnius_time.strftime('%H:%M')}.")
 
     print(f"Running at {vilnius_time.strftime('%H:%M')} Vilnius, day {current_day}...")
 
@@ -178,4 +179,8 @@ async def check_slots():
             print(f"ALERT SENT — Group B is {pct_value}% full!")
         elif pct_value == 0:
             print("Group B is 0% — round not open yet. No alert.")
-        el
+        else:
+            print("Group B is 100% full. No alert.")
+
+if __name__ == "__main__":
+    asyncio.run(check_slots())
