@@ -32,7 +32,7 @@ async def check_slots():
     current_hour = vilnius_time.hour
     current_day  = vilnius_time.day
 
-    if current_hour >= 23 or current_hour < 6:
+    if current_hour >= 23 or current_hour < 7:
         print(f"Outside active hours ({vilnius_time.strftime('%H:%M')} Vilnius). Skipping.")
         return
 
