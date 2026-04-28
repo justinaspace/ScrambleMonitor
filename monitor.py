@@ -2,8 +2,6 @@ import os
 import json
 import asyncio
 import requests
-from datetime import datetime
-import zoneinfo
 from playwright.async_api import async_playwright
 
 # ----------------------------------------------------------------
