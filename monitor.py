@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+import calendar
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -43,11 +44,29 @@ def send_all(message: str) -> None:
 # ----------------------------------------------------------------
 # Schedule logic
 # ----------------------------------------------------------------
+def is_last_day_of_month(now: datetime) -> bool:
+    last_day = calendar.monthrange(now.year, now.month)[1]
+    return now.day == last_day
+
 def should_run_now(now: datetime) -> bool:
     h, m, d = now.hour, now.minute, now.day
 
     if h >= 23 or h < 7:
         logging.info("Night skip: %s Vilnius. Sleeping.", now.strftime("%H:%M"))
+        return False
+
+    # Last day of month: also allow the entire 12:xx hour so the reserve
+    # alert can fire even with GitHub Actions cron delays. 07:00 and
+    # 15:00 stay strict to match the existing behavior on days 21-31.
+    if is_last_day_of_month(now):
+        if (h == 7 and m == 0) or (h == 12) or (h == 15 and m == 0):
+            logging.info(
+                "Last day of month — running at %s.", now.strftime("%H:%M")
+            )
+            return True
+        logging.info(
+            "Last day of month — slot not allowed at %s.", now.strftime("%H:%M")
+        )
         return False
 
     if 1 <= d <= 16:
@@ -63,7 +82,9 @@ def should_run_now(now: datetime) -> bool:
 
     if 21 <= d <= 31:
         if not ((h == 7 and m == 0) or (h == 15 and m == 0)):
-            logging.info("Day %s — 2x daily schedule, skipping at %s.", d, now.strftime("%H:%M"))
+            logging.info(
+                "Day %s — 2x daily schedule, skipping at %s.", d, now.strftime("%H:%M")
+            )
             return False
         logging.info("Day %s — running 2x daily at %s.", d, now.strftime("%H:%M"))
         return True
@@ -139,6 +160,19 @@ async def get_group_b(page):
 # ----------------------------------------------------------------
 async def check_slots():
     now = datetime.now(TZ)
+
+    # ── Reserve alert: last day of month, anywhere in the 12:xx hour ──
+    # Hour-only check tolerates GitHub Actions cron delay (often 5-15 min).
+    # Runs before should_run_now() so it cannot be blocked by schedule.
+    if is_last_day_of_month(now) and now.hour == 12:
+        logging.info("Last day of month, 12:%02d Vilnius — sending reserve alert.",
+                     now.minute)
+        send_all(
+            "⚠️ Scramble Groupe B Bot.\n"
+            "RESERVE the Groupe B funds/slots"
+        )
+    # ──────────────────────────────────────────────────────────────────
+
     if not should_run_now(now):
         return
 
