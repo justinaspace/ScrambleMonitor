@@ -215,7 +215,7 @@ async def check_slots():
                 logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all(f"⚠️ Monitor Crash: {str(e)[:200]}")
+            send_all("⚠️ Scramble Groupe B Bot.\nUpdate the Cookies.")
         finally:
             await browser.close()
 
