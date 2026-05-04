@@ -1,13 +1,16 @@
 name: ScrambleUp Group B Monitor
-
 on:
   schedule:
     - cron: '5-55/10 5-21 1-16 * *'
     - cron: '5 5-21 17-20 * *'
     - cron: '5 5 21-31 * *'
     - cron: '5 13 21-31 * *'
+    # Reserve alert at 12:00 Vilnius on the last day of the month.
+    # Vilnius = UTC+3 (summer/EEST) or UTC+2 (winter/EET), so we
+    # need both UTC slots; Python decides which actually fires.
+    - cron: '0 9 28-31 * *'   # 12:00 Vilnius in summer (EEST)
+    - cron: '0 10 28-31 * *'  # 12:00 Vilnius in winter (EET)
   workflow_dispatch:
-
 jobs:
   monitor:
     runs-on: ubuntu-latest
