@@ -105,7 +105,7 @@ async def setup_page(context, cookies_list, localstorage):
 
     return page
 
-async def get_group_b(page):
+async def get_groups(page):
     group_selector      = '[class*="_group_"]'
     percentage_selector = '[class*="_percentage_"]'
 
@@ -113,25 +113,33 @@ async def get_group_b(page):
     groups = await page.query_selector_all(group_selector)
     logging.info("Found %d group element(s).", len(groups))
 
+    group_a_pct = None
+    group_b_pct = None
+    group_b_context = None
+
     for group in groups:
         text = (await group.inner_text()).strip()
-        if "group b" not in text.lower():
-            continue
         pct_el = await group.query_selector(percentage_selector)
         if not pct_el:
             continue
         pct_text = (await pct_el.inner_text()).strip()
-        logging.info("Group B found: %s | %s", pct_text, text[:60])
-        return pct_text, text
+
+        if "group b" in text.lower():
+            group_b_pct = pct_text
+            group_b_context = text
+            logging.info("Group B found: %s | %s", pct_text, text[:60])
+        elif "group a" in text.lower():
+            group_a_pct = pct_text
+            logging.info("Group A found: %s | %s", pct_text, text[:60])
 
     # Fallback: single percentage element on page
-    all_pcts = await page.query_selector_all(percentage_selector)
-    if len(all_pcts) == 1:
-        logging.info("Fallback: using single percentage element.")
-        pct_text = (await all_pcts[0].inner_text()).strip()
-        return pct_text, ""
+    if group_b_pct is None:
+        all_pcts = await page.query_selector_all(percentage_selector)
+        if len(all_pcts) == 1:
+            logging.info("Fallback: using single percentage element.")
+            group_b_pct = (await all_pcts[0].inner_text()).strip()
 
-    return None, None
+    return group_b_pct, group_b_context, group_a_pct
 
 # ----------------------------------------------------------------
 # Main
@@ -193,8 +201,8 @@ async def check_slots():
                 )
                 return
 
-            # Extract percentage
-            pct_text, group_b_context = await get_group_b(page)
+            # Extract percentages
+            pct_text, group_b_context, group_a_pct = await get_groups(page)
 
             if pct_text is None:
                 send_all("⚠️ Could not find Group B percentage. Please check manually.")
@@ -205,6 +213,15 @@ async def check_slots():
             except ValueError:
                 send_all(f"⚠️ Unexpected percentage format: '{pct_text}'")
                 return
+
+            # Parse Group A percentage for display
+            pct_value_a_str = "N/A"
+            if group_a_pct is not None:
+                try:
+                    pct_value_a = float(group_a_pct.replace("%", "").strip())
+                    pct_value_a_str = f"{pct_value_a}%"
+                except ValueError:
+                    pct_value_a_str = group_a_pct
 
             logging.info("Group B is %.1f%% filled.", pct_value)
 
@@ -217,6 +234,7 @@ async def check_slots():
                     f"🙂 Group B investment is OPEN!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
                     f"💶 {context_line}\n\n"
+                    f"📊 Groupe A {pct_value_a_str} filled\n"
                     f"👉 Invest now:\n{GROUP_B_URL}"
                 )
                 logging.info("ALERT SENT — Group B is %.1f%% full.", pct_value)
@@ -224,7 +242,7 @@ async def check_slots():
                 logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all("⚠️ Scramble Groupe B Bot.\nUpdate the Cookies.\n👉 From here:\n{GROUP_B_URL}")
+            send_all("⚠️ Scramble Groupe B Bot.\nUpdate the Cookies.\n👉 Here:\n{GROUP_B_URL}")
         finally:
             await browser.close()
 
