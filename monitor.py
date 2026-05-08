@@ -152,8 +152,8 @@ async def check_slots():
         logging.info("Last day of month, 12:%02d Vilnius — sending reserve alert.",
                      now.minute)
         send_all(
-            "⚠️ Scramble Groupe B Bot.\n"
-            "RESERVE the Groupe B funds/slots"
+            "⚠️ Scramble Group B Bot.\n"
+            "RESERVE the Group B funds/slots"
         )
 
     if not should_run_now(now):
@@ -193,16 +193,20 @@ async def check_slots():
                 "sign in" in page_text and "logout" not in page_text
             ):
                 send_all(
-                    "🔐 ScrambleUp Monitor: SESSION EXPIRED\n\n"
-                    "Do this to resume:\n"
-                    "1. Log in to investor.scrambleup.com\n"
-                    "2. Click 'ScrambleUp Auth Export' bookmark\n"
-                    "3. Paste into GitHub Secret: SCRAMBLE_AUTH"
+                    f"🔐 Session expired ⚠️\n"
+                    f"{GROUP_B_URL}"
                 )
                 return
 
             # Extract percentages
-            pct_text, group_b_context, group_a_pct = await get_groups(page)
+            try:
+                pct_text, group_b_context, group_a_pct = await get_groups(page)
+            except PlaywrightTimeoutError:
+                send_all(
+                    f"🔐 Session expired ⚠️\n"
+                    f"{GROUP_B_URL}"
+                )
+                return
 
             if pct_text is None:
                 send_all("⚠️ Could not find Group B percentage. Please check manually.")
@@ -232,7 +236,7 @@ async def check_slots():
                     f"🙂 Group B investment is OPEN!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
                     f"💶 {context_line}\n"
-                    f"📊 Groupe A {pct_value_a_str} filled\n"
+                    f"📊 Group A {pct_value_a_str} filled\n"
                     f"👉 Invest now:\n{GROUP_B_URL}"
                 )
                 logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
@@ -240,7 +244,7 @@ async def check_slots():
                 logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all("⚠️ Scramble Groupe B Bot.\nUpdate the Cookies.\n👉 Here:\n{GROUP_B_URL}")
+            send_all(f"⚠️ Scramble Group B Bot.\nUpdate the Cookies.\n👉 Here:\n{GROUP_B_URL}")
         finally:
             await browser.close()
 
