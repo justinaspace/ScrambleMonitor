@@ -209,7 +209,7 @@ async def check_slots():
                 return
 
             try:
-                pct_value = float(pct_text.replace("%", "").strip())
+                pct_value = int(float(pct_text.replace("%", "").strip()))
             except ValueError:
                 send_all(f"⚠️ Unexpected percentage format: '{pct_text}'")
                 return
@@ -218,12 +218,11 @@ async def check_slots():
             pct_value_a_str = "N/A"
             if group_a_pct is not None:
                 try:
-                    pct_value_a = float(group_a_pct.replace("%", "").strip())
-                    pct_value_a_str = f"{pct_value_a}%"
+                    pct_value_a_str = f"{int(float(group_a_pct.replace('%', '').strip()))}%"
                 except ValueError:
                     pct_value_a_str = group_a_pct
 
-            logging.info("Group B is %.1f%% filled.", pct_value)
+            logging.info("Group B is %d%% filled.", pct_value)
 
             if pct_value == 0:
                 logging.info("Group B is 0%% — round not open yet. No alert.")
@@ -237,7 +236,7 @@ async def check_slots():
                     f"📊 Groupe A {pct_value_a_str} filled\n"
                     f"👉 Invest now:\n{GROUP_B_URL}"
                 )
-                logging.info("ALERT SENT — Group B is %.1f%% full.", pct_value)
+                logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
             else:
                 logging.info("Group B is 100%% full. No alert.")
 
