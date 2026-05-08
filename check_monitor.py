@@ -160,7 +160,7 @@ async def run_check():
                 context_line_a = group_a_context.splitlines()[0].strip()
 
             send_all(
-                f"🙂 Group B investment is OPEN!\n"
+                f"🙂 Group B investment\n"
                 f"📈 Currently **{pct_value}%** filled ⚡\n"
                 f"💶 {context_line}\n\n"
                 f"📊 Group A {pct_value_a_str} filled\n"
