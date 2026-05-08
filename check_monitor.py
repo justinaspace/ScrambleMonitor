@@ -41,7 +41,7 @@ def extract_left_line(full_text: str) -> str:
             return line.strip()
     return ""
 
-async def setup_page(context, cookies_list, localstorage):
+ def setup_page(context, cookies_list, localstorage):
     cookies = [
         {
             "name":   c["name"],
@@ -67,7 +67,7 @@ async def setup_page(context, cookies_list, localstorage):
 
     return page
 
-async def get_groups(page):
+ def get_groups(page):
     group_selector      = '[class*="_group_"]'
     percentage_selector = '[class*="_percentage_"]'
 
@@ -98,7 +98,7 @@ async def get_groups(page):
 
     return group_b_pct, group_b_context, group_a_pct, group_a_context
 
-async def run_test():
+async def check_test():
     now = datetime.now(TZ)
     logging.info("TEST RUN at %s Vilnius.", now.strftime("%H:%M"))
 
@@ -172,4 +172,4 @@ async def run_test():
             await browser.close()
 
 if __name__ == "__main__":
-    asyncio.run(run_test())
+    asyncio.run(run_check())
