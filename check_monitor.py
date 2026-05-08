@@ -128,14 +128,19 @@ async def run_check():
                 "sign in" in page_text and "logout" not in page_text
             ):
                 send_all(
-                    "❌ CHECK FAILED — session expired.\n\n"
-                    "1. Log in to investor.scrambleup.com\n"
-                    "2. Click 'ScrambleUp Auth Export' bookmark\n"
-                    "3. Paste into GitHub Secret: SCRAMBLE_AUTH"
+                    f"🔐 Session expired ⚠️\n"
+                    f"{GROUP_B_URL}"
                 )
                 return
 
-            group_b_pct, group_b_context, group_a_pct, group_a_context = await get_groups(page)
+            try:
+                group_b_pct, group_b_context, group_a_pct, group_a_context = await get_groups(page)
+            except PlaywrightTimeoutError:
+                send_all(
+                    f"🔐 Session expired ⚠️\n"
+                    f"{GROUP_B_URL}"
+                )
+                return
 
             if group_b_pct is None:
                 send_all("❌ CHECK FAILED — could not find Group B percentage.")
