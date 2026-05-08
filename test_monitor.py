@@ -36,7 +36,6 @@ def parse_auth():
     return auth.get("cookies", []), auth.get("localStorage", {})
 
 def extract_left_line(full_text: str) -> str:
-    """Return the line containing 'left' from the group text, or empty string."""
     for line in full_text.splitlines():
         if "left" in line.lower():
             return line.strip()
@@ -144,26 +143,28 @@ async def run_test():
 
             pct_value    = int(float(group_b_pct.replace("%", "").strip()))
             context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
-            b_left_line  = extract_left_line(group_b_context) if group_b_context else ""
+            b_left_str   = extract_left_line(group_b_context) if group_b_context else ""
 
             pct_value_a_str = "N/A"
-            a_left_line     = ""
+            context_line_a  = ""
+            a_left_str      = ""
             if group_a_pct is not None:
                 try:
                     pct_value_a_str = f"{int(float(group_a_pct.replace('%', '').strip()))}%"
                 except ValueError:
                     pct_value_a_str = group_a_pct
             if group_a_context:
-                a_left_line = extract_left_line(group_a_context)
-
-            b_left_str = f" — {b_left_line}" if b_left_line else ""
-            a_left_str = f" — {a_left_line}" if a_left_line else ""
+                context_line_a = group_a_context.splitlines()[0].strip()
+                a_left_str     = extract_left_line(group_a_context)
 
             send_all(
                 f"🙂 Group B investment is OPEN!\n"
-                f"📈 Currently **{pct_value}%** filled ⚡{b_left_str}\n"
+                f"📈 Currently **{pct_value}%** filled ⚡\n"
                 f"💶 {context_line}\n"
-                f"📊 Group A {pct_value_a_str} filled{a_left_str}\n"
+                f"{b_left_str}\n\n"
+                f"📊 Group A {pct_value_a_str} filled\n"
+                f"💶 {context_line_a}\n"
+                f"{a_left_str}\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
 
