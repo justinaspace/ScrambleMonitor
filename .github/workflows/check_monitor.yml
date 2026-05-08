@@ -1,4 +1,4 @@
-name: ScrambleUp Test
+name: ScrambleUp Check
 on:
   workflow_dispatch:
 jobs:
@@ -18,8 +18,8 @@ jobs:
         run: |
           pip install requests playwright
           playwright install chromium --with-deps
-      - name: Run test
+      - name: Run check
         env:
           SCRAMBLE_AUTH: ${{ secrets.SCRAMBLE_AUTH }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: python test_monitor.py
+        run: python check_monitor.py
