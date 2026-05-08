@@ -232,7 +232,7 @@ async def check_slots():
                     f"🚨 SCRAMBLE ALERT 🚨\n\n"
                     f"🙂 Group B investment is OPEN!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
-                    f"💶 {context_line}\n\n"
+                    f"💶 {context_line}\n"
                     f"📊 Groupe A {pct_value_a_str} filled\n"
                     f"👉 Invest now:\n{GROUP_B_URL}"
                 )
