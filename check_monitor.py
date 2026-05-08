@@ -165,7 +165,7 @@ async def run_check():
                 f"💶 {context_line}\n\n"
                 f"📊 Group A {pct_value_a_str} filled\n"
                 f"💶 {context_line_a}\n\n"
-                f"👉 Invest now:\n{GROUP_B_URL}"
+                f"{GROUP_B_URL} ⬅️ Invest now"
             )
 
         except Exception as e:
