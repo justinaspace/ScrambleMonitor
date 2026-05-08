@@ -229,7 +229,6 @@ async def check_slots():
             elif 0 < pct_value < 100:
                 context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
                 send_all(
-                    f"🚨 SCRAMBLE ALERT 🚨\n\n"
                     f"🙂 Group B investment is OPEN!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
                     f"💶 {context_line}\n"
