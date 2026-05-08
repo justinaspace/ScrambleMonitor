@@ -194,7 +194,7 @@ async def check_slots():
             ):
                 send_all(
                     f"🔐 Session expired ⚠️\n"
-                    f"{GROUP_B_URL}"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
                 )
                 return
 
@@ -204,7 +204,7 @@ async def check_slots():
             except PlaywrightTimeoutError:
                 send_all(
                     f"🔐 Session expired ⚠️\n"
-                    f"{GROUP_B_URL}"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
                 )
                 return
 
@@ -237,14 +237,14 @@ async def check_slots():
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
                     f"💶 {context_line}\n"
                     f"📊 Group A {pct_value_a_str} filled\n"
-                    f"👉 Invest now:\n{GROUP_B_URL}"
+                    f"{GROUP_B_URL} ⬅️ Invest now"
                 )
                 logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
             else:
                 logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all(f"🔐 Update the Cookies ⚠️\n{GROUP_B_URL}")
+            send_all(f"🔐 Update the Cookies ⚠️\n{GROUP_B_URL} ⬅️ Copy here")
         finally:
             await browser.close()
 
