@@ -35,6 +35,13 @@ def parse_auth():
     auth = json.loads(AUTH_JSON)
     return auth.get("cookies", []), auth.get("localStorage", {})
 
+def extract_left_line(full_text: str) -> str:
+    """Return the line containing 'left' from the group text, or empty string."""
+    for line in full_text.splitlines():
+        if "left" in line.lower():
+            return line.strip()
+    return ""
+
 async def setup_page(context, cookies_list, localstorage):
     cookies = [
         {
@@ -69,8 +76,9 @@ async def get_groups(page):
     groups = await page.query_selector_all(group_selector)
     logging.info("Found %d group element(s).", len(groups))
 
-    group_a_pct = None
-    group_b_pct = None
+    group_a_pct     = None
+    group_a_context = None
+    group_b_pct     = None
     group_b_context = None
 
     for group in groups:
@@ -81,14 +89,15 @@ async def get_groups(page):
         pct_text = (await pct_el.inner_text()).strip()
 
         if "group b" in text.lower():
-            group_b_pct = pct_text
+            group_b_pct     = pct_text
             group_b_context = text
             logging.info("Group B found: %s | %s", pct_text, text[:60])
         elif "group a" in text.lower():
-            group_a_pct = pct_text
+            group_a_pct     = pct_text
+            group_a_context = text
             logging.info("Group A found: %s | %s", pct_text, text[:60])
 
-    return group_b_pct, group_b_context, group_a_pct
+    return group_b_pct, group_b_context, group_a_pct, group_a_context
 
 async def run_test():
     now = datetime.now(TZ)
@@ -127,27 +136,34 @@ async def run_test():
                 )
                 return
 
-            group_b_pct, group_b_context, group_a_pct = await get_groups(page)
+            group_b_pct, group_b_context, group_a_pct, group_a_context = await get_groups(page)
 
             if group_b_pct is None:
                 send_all("❌ TEST FAILED — could not find Group B percentage.")
                 return
 
-            pct_value = int(float(group_b_pct.replace("%", "").strip()))
+            pct_value    = int(float(group_b_pct.replace("%", "").strip()))
             context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
+            b_left_line  = extract_left_line(group_b_context) if group_b_context else ""
 
             pct_value_a_str = "N/A"
+            a_left_line     = ""
             if group_a_pct is not None:
                 try:
                     pct_value_a_str = f"{int(float(group_a_pct.replace('%', '').strip()))}%"
                 except ValueError:
                     pct_value_a_str = group_a_pct
+            if group_a_context:
+                a_left_line = extract_left_line(group_a_context)
+
+            b_left_str = f" — {b_left_line}" if b_left_line else ""
+            a_left_str = f" — {a_left_line}" if a_left_line else ""
 
             send_all(
                 f"🙂 Group B investment is OPEN!\n"
-                f"📈 Currently **{pct_value}%** filled ⚡\n"
+                f"📈 Currently **{pct_value}%** filled ⚡{b_left_str}\n"
                 f"💶 {context_line}\n"
-                f"📊 Groupe A {pct_value_a_str} filled\n"
+                f"📊 Group A {pct_value_a_str} filled{a_left_str}\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
 
