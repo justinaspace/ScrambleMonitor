@@ -160,11 +160,9 @@ async def run_test():
             send_all(
                 f"🙂 Group B investment is OPEN!\n"
                 f"📈 Currently **{pct_value}%** filled ⚡\n"
-                f"💶 {context_line}\n"
-                f"{b_left_str}\n\n"
+                f"💶 {context_line}\n\n"
                 f"📊 Group A {pct_value_a_str} filled\n"
-                f"💶 {context_line_a}\n"
-                f"{a_left_str}\n\n"
+                f"💶 {context_line_a}\n\n"
                 f"👉 Invest now:\n{GROUP_B_URL}"
             )
 
