@@ -55,40 +55,18 @@ def should_run_now(now: datetime) -> bool:
         logging.info("Night skip: %s Vilnius. Sleeping.", now.strftime("%H:%M"))
         return False
 
-    # Last day of month: also allow the entire 12:xx hour so the reserve
-    # alert can fire even with GitHub Actions cron delays. 07:00 and
-    # 15:00 stay strict to match the existing behavior on days 21-31.
     if is_last_day_of_month(now):
-        if (h == 7 and m == 0) or (h == 12) or (h == 15 and m == 0):
-            logging.info(
-                "Last day of month — running at %s.", now.strftime("%H:%M")
-            )
+        if (h == 7 and m == 0) or (h == 15 and m == 0):
+            logging.info("Last day of month — running at %s.", now.strftime("%H:%M"))
             return True
-        logging.info(
-            "Last day of month — slot not allowed at %s.", now.strftime("%H:%M")
-        )
+        logging.info("Last day of month — slot not allowed at %s.", now.strftime("%H:%M"))
         return False
 
     if 1 <= d <= 16:
         logging.info("Day %s — running every 10 min.", d)
         return True
 
-    if 17 <= d <= 20:
-        if m != 0:
-            logging.info("Day %s — 60 min schedule, skipping at :%02d.", d, m)
-            return False
-        logging.info("Day %s — running every 60 min.", d)
-        return True
-
-    if 21 <= d <= 31:
-        if not ((h == 7 and m == 0) or (h == 15 and m == 0)):
-            logging.info(
-                "Day %s — 2x daily schedule, skipping at %s.", d, now.strftime("%H:%M")
-            )
-            return False
-        logging.info("Day %s — running 2x daily at %s.", d, now.strftime("%H:%M"))
-        return True
-
+    logging.info("Day %s — not in active schedule, skipping.", d)
     return False
 
 # ----------------------------------------------------------------
@@ -162,8 +140,6 @@ async def check_slots():
     now = datetime.now(TZ)
 
     # ── Reserve alert: last day of month, anywhere in the 12:xx hour ──
-    # Hour-only check tolerates GitHub Actions cron delay (often 5-15 min).
-    # Runs before should_run_now() so it cannot be blocked by schedule.
     if is_last_day_of_month(now) and now.hour == 12:
         logging.info("Last day of month, 12:%02d Vilnius — sending reserve alert.",
                      now.minute)
@@ -171,7 +147,6 @@ async def check_slots():
             "⚠️ Scramble Groupe B Bot.\n"
             "RESERVE the Groupe B funds/slots"
         )
-    # ──────────────────────────────────────────────────────────────────
 
     if not should_run_now(now):
         return
@@ -249,7 +224,7 @@ async def check_slots():
                 logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all("⚠️ Scramble Groupe B Bot.\nUpdate the Cookies.\n👉 Here:\n{GROUP_B_URL}")
+            send_all("⚠️ Scramble Groupe B Bot.\nUpdate the Cookies.\n👉 From here:\n{GROUP_B_URL}")
         finally:
             await browser.close()
 
