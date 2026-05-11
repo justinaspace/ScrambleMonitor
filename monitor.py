@@ -51,7 +51,7 @@ def is_last_day_of_month(now: datetime) -> bool:
 def should_run_now(now: datetime) -> bool:
     h, m, d = now.hour, now.minute, now.day
 
-    if h >= 23 or h < 7:
+    if h >= 22 or h < 7:
         logging.info("Night skip: %s Vilnius. Sleeping.", now.strftime("%H:%M"))
         return False
 
@@ -235,7 +235,7 @@ async def check_slots():
                 send_all(
                     f"🙂 OPEN investment in Group B!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
-                    f"💶 {context_line}\n\n"
+                    f"💶 {context_line}\n"
                     f"📊 Group A {pct_value_a_str} filled\n"
                     f"{GROUP_B_URL} ⬅️ Invest now"
                 )
