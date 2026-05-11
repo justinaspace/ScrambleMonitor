@@ -2,12 +2,10 @@ name: ScrambleUp Group B Monitor
 on:
   schedule:
     - cron: '5-55/10 5-19 1-16 * *'   # Days 1-16: every 10 min, 07:00-22:00 Vilnius
-    - cron: '5 4 28-31 * *'            # Last day: 07:00 Vilnius (summer EEST, UTC+3)
-    - cron: '5 5 28-31 * *'            # Last day: 07:00 Vilnius (winter EET,  UTC+2)
-    - cron: '5 12 28-31 * *'           # Last day: 15:00 Vilnius (summer EEST, UTC+3)
-    - cron: '5 13 28-31 * *'           # Last day: 15:00 Vilnius (winter EET,  UTC+2)
-    - cron: '0 9 28-31 * *'            # Last day: 12:00 Vilnius reserve alert (summer)
-    - cron: '0 10 28-31 * *'           # Last day: 12:00 Vilnius reserve alert (winter)
+    - cron: '0 9 28-31 * *'            # Last day: 12:00 Vilnius reserve alert (summer EEST, UTC+3)
+    - cron: '0 10 28-31 * *'           # Last day: 12:00 Vilnius reserve alert (winter EET,  UTC+2)
+    - cron: '0 15 28-31 * *'           # Last day: 18:00 Vilnius check (summer EEST, UTC+3)
+    - cron: '0 16 28-31 * *'           # Last day: 18:00 Vilnius check (winter EET,  UTC+2)
   workflow_dispatch:
 jobs:
   monitor:
