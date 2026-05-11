@@ -169,4 +169,90 @@ async def check_slots():
             "Loaded %d cookies and %d localStorage keys.",
             len(cookies_list), len(localstorage)
         )
-    except Exc
+    except Exception as e:
+        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
+        return
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        context = await browser.new_context(user_agent=USER_AGENT)
+
+        try:
+            page = await setup_page(context, cookies_list, localstorage)
+
+            await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15000)
+            except PlaywrightTimeoutError:
+                logging.warning("networkidle timeout — continuing anyway.")
+
+            await page.wait_for_timeout(2000)
+            logging.info("Current URL: %s", page.url)
+
+            # Session check
+            page_text = (await page.content()).lower()
+            if "login" in page.url.lower() or (
+                "sign in" in page_text and "logout" not in page_text
+            ):
+                send_all(
+                    f"🔐 Session expired ⚠️\n"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
+                )
+                return
+
+            # Extract percentages
+            try:
+                pct_text, group_b_context, group_a_pct, group_a_context = await get_groups(page)
+            except PlaywrightTimeoutError:
+                send_all(
+                    f"🔐 Session expired ⚠️\n"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
+                )
+                return
+
+            if pct_text is None:
+                send_all("⚠️ Could not find Group B percentage. Please check manually.")
+                return
+
+            try:
+                pct_value = int(float(pct_text.replace("%", "").strip()))
+            except ValueError:
+                send_all(f"⚠️ Unexpected percentage format: '{pct_text}'")
+                return
+
+            # Parse Group A percentage and context for display
+            pct_value_a_str = "N/A"
+            context_line_a  = ""
+            if group_a_pct is not None:
+                try:
+                    pct_value_a_str = f"{int(float(group_a_pct.replace('%', '').strip()))}%"
+                except ValueError:
+                    pct_value_a_str = group_a_pct
+            if group_a_context:
+                context_line_a = group_a_context.splitlines()[0].strip()
+
+            logging.info("Group B is %d%% filled.", pct_value)
+
+            if pct_value == 0:
+                logging.info("Group B is 0%% — round not open yet. No alert.")
+            elif 0 < pct_value < 100:
+                context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
+                send_all(
+                    f"🙂 OPEN investment in Group B!\n"
+                    f"📈 Currently **{pct_value}%** filled ⚡\n"
+                    f"💶 {context_line}\n\n"
+                    f"📊 Group A {pct_value_a_str} filled\n"
+                    f"💼 {context_line_a}\n\n"
+                    f"{GROUP_B_URL} ⬅️ Invest now"
+                )
+                logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
+            else:
+                logging.info("Group B is 100%% full. No alert.")
+
+        except Exception as e:
+            send_all(f"⚠️ Something unexpected\n🔐 Try to update the Cookies\n{GROUP_B_URL} ⬅️ Copy here")
+        finally:
+            await browser.close()
+
+if __name__ == "__main__":
+    asyncio.run(check_slots())
