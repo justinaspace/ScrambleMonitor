@@ -56,7 +56,7 @@ def should_run_now(now: datetime) -> bool:
         return False
 
     if is_last_day_of_month(now):
-        if (h == 7 and m == 0) or (h == 15 and m == 0):
+        if h == 18 and m == 0:
             logging.info("Last day of month — running at %s.", now.strftime("%H:%M"))
             return True
         logging.info("Last day of month — slot not allowed at %s.", now.strftime("%H:%M"))
