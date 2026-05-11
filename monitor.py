@@ -240,9 +240,9 @@ async def check_slots():
                 send_all(
                     f"🙂 OPEN investment in Group B!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
-                    f"💶 {context_line}\n\n"
+                    f"💸 {context_line}\n\n"
                     f"📊 Group A - {pct_value_a_str} filled\n"
-                    f"💼 {context_line_a}\n"
+                    f"💶 {context_line_a}\n"
                     f"{GROUP_B_URL} ⬅️ Invest now\n"
                 )
                 logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
