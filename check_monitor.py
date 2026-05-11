@@ -2,14 +2,19 @@ import os
 import json
 import asyncio
 import logging
+import calendar
+import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-import requests
-from zoneinfo import ZoneInfo
-from datetime import datetime
 
+# ----------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------
 AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
+MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 BASE_URL        = "https://investor.scrambleup.com"
 TZ              = ZoneInfo("Europe/Vilnius")
@@ -19,8 +24,14 @@ USER_AGENT      = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
 
+# ----------------------------------------------------------------
+# Notification
+# ----------------------------------------------------------------
 def send_all(message: str) -> None:
     logging.info(message)
     if not DISCORD_WEBHOOK:
@@ -31,16 +42,44 @@ def send_all(message: str) -> None:
     except Exception as e:
         logging.error("Failed to send Discord: %s", e)
 
+# ----------------------------------------------------------------
+# Schedule logic
+# ----------------------------------------------------------------
+def is_last_day_of_month(now: datetime) -> bool:
+    last_day = calendar.monthrange(now.year, now.month)[1]
+    return now.day == last_day
+
+def should_run_now(now: datetime) -> bool:
+    h, m, d = now.hour, now.minute, now.day
+
+    if h >= 22 or h < 7:
+        logging.info("Night skip: %s Vilnius. Sleeping.", now.strftime("%H:%M"))
+        return False
+
+    if is_last_day_of_month(now):
+        if h == 18 and m == 0:
+            logging.info("Last day of month — running at %s.", now.strftime("%H:%M"))
+            return True
+        logging.info("Last day of month — slot not allowed at %s.", now.strftime("%H:%M"))
+        return False
+
+    if 1 <= d <= 16:
+        logging.info("Day %s — running every 10 min.", d)
+        return True
+
+    logging.info("Day %s — not in active schedule, skipping.", d)
+    return False
+
+# ----------------------------------------------------------------
+# Auth
+# ----------------------------------------------------------------
 def parse_auth():
     auth = json.loads(AUTH_JSON)
     return auth.get("cookies", []), auth.get("localStorage", {})
 
-def extract_left_line(full_text: str) -> str:
-    for line in full_text.splitlines():
-        if "left" in line.lower():
-            return line.strip()
-    return ""
-
+# ----------------------------------------------------------------
+# Browser helpers
+# ----------------------------------------------------------------
 async def setup_page(context, cookies_list, localstorage):
     cookies = [
         {
@@ -96,17 +135,46 @@ async def get_groups(page):
             group_a_context = text
             logging.info("Group A found: %s | %s", pct_text, text[:60])
 
+    # Fallback: single percentage element on page
+    if group_b_pct is None:
+        all_pcts = await page.query_selector_all(percentage_selector)
+        if len(all_pcts) == 1:
+            logging.info("Fallback: using single percentage element.")
+            group_b_pct = (await all_pcts[0].inner_text()).strip()
+
     return group_b_pct, group_b_context, group_a_pct, group_a_context
 
-async def run_check():
+# ----------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------
+async def check_slots():
     now = datetime.now(TZ)
-    logging.info("CHECK RUN at %s Vilnius.", now.strftime("%H:%M"))
+
+    # ── Reserve alert: last day of month, anywhere in the 12:xx hour ──
+    if not MANUAL_RUN and is_last_day_of_month(now) and now.hour == 12:
+        logging.info("Last day of month, 12:%02d Vilnius — sending reserve alert.",
+                     now.minute)
+        send_all(
+            "⚠️ Scramble Group B Bot.\n"
+            "RESERVE the Group B funds/slots"
+        )
+
+    if not MANUAL_RUN and not should_run_now(now):
+        return
+
+    if MANUAL_RUN:
+        logging.info("Manual run triggered — skipping schedule check.")
+
+    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
 
     try:
         cookies_list, localstorage = parse_auth()
-        logging.info("Loaded %d cookies and %d localStorage keys.", len(cookies_list), len(localstorage))
+        logging.info(
+            "Loaded %d cookies and %d localStorage keys.",
+            len(cookies_list), len(localstorage)
+        )
     except Exception as e:
-        send_all(f"❌ CHECK FAILED — could not parse SCRAMBLE_AUTH.\nError: {e}")
+        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
     async with async_playwright() as p:
@@ -115,6 +183,7 @@ async def run_check():
 
         try:
             page = await setup_page(context, cookies_list, localstorage)
+
             await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
             try:
                 await page.wait_for_load_state("networkidle", timeout=15000)
@@ -122,33 +191,40 @@ async def run_check():
                 logging.warning("networkidle timeout — continuing anyway.")
 
             await page.wait_for_timeout(2000)
+            logging.info("Current URL: %s", page.url)
 
+            # Session check
             page_text = (await page.content()).lower()
             if "login" in page.url.lower() or (
                 "sign in" in page_text and "logout" not in page_text
             ):
                 send_all(
                     f"🔐 Session expired ⚠️\n"
-                    f"{GROUP_B_URL}"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
                 )
                 return
 
+            # Extract percentages
             try:
-                group_b_pct, group_b_context, group_a_pct, group_a_context = await get_groups(page)
+                pct_text, group_b_context, group_a_pct, group_a_context = await get_groups(page)
             except PlaywrightTimeoutError:
                 send_all(
                     f"🔐 Session expired ⚠️\n"
-                    f"{GROUP_B_URL}"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
                 )
                 return
 
-            if group_b_pct is None:
-                send_all("❌ CHECK FAILED — could not find Group B percentage.")
+            if pct_text is None:
+                send_all("⚠️ Could not find Group B percentage. Please check manually.")
                 return
 
-            pct_value    = int(float(group_b_pct.replace("%", "").strip()))
-            context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
+            try:
+                pct_value = int(float(pct_text.replace("%", "").strip()))
+            except ValueError:
+                send_all(f"⚠️ Unexpected percentage format: '{pct_text}'")
+                return
 
+            # Parse Group A percentage and context for display
             pct_value_a_str = "N/A"
             context_line_a  = ""
             if group_a_pct is not None:
@@ -159,19 +235,28 @@ async def run_check():
             if group_a_context:
                 context_line_a = group_a_context.splitlines()[0].strip()
 
-            send_all(
-                f"🙂 Group B investment\n"
-                f"📈 Currently **{pct_value}%** filled ⚡\n"
-                f"💶 {context_line}\n\n"
-                f"📊 Group A {pct_value_a_str} filled\n"
-                f"💶 {context_line_a}\n\n"
-                f"{GROUP_B_URL} ⬅️ Invest now"
-            )
+            logging.info("Group B is %d%% filled.", pct_value)
+
+            if pct_value == 0:
+                logging.info("Group B is 0%% — round not open yet. No alert.")
+            elif 0 < pct_value < 100:
+                context_line = group_b_context.splitlines()[0].strip() if group_b_context else "Group B"
+                send_all(
+                    f"🙂 OPEN investment in Group B!\n"
+                    f"📈 Currently **{pct_value}%** filled ⚡\n"
+                    f"💸 {context_line}\n"
+                    f"📊 Group A - {pct_value_a_str} filled\n"
+                    f"💵 {context_line_a}\n"
+                    f"{GROUP_B_URL} ⬅️ Invest now\n"
+                )
+                logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
+            else:
+                logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all(f"❌ CHECK FAILED — unexpected error.\n{e}")
+            send_all(f"⚠️ Something unexpected\n🔐 Try to update the Cookies\n{GROUP_B_URL} ⬅️ Copy here")
         finally:
             await browser.close()
 
 if __name__ == "__main__":
-    asyncio.run(run_check())
+    asyncio.run(check_slots())
