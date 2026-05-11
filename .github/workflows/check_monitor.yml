@@ -22,4 +22,5 @@ jobs:
         env:
           SCRAMBLE_AUTH: ${{ secrets.SCRAMBLE_AUTH }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: python check_monitor.py
