@@ -62,7 +62,7 @@ def should_run_now(now: datetime) -> bool:
         logging.info("Last day of month — slot not allowed at %s.", now.strftime("%H:%M"))
         return False
 
-    if 1 <= d <= 16:
+    if 1 <= d <= 10:
         logging.info("Day %s — running every 10 min.", d)
         return True
 
@@ -240,7 +240,7 @@ async def check_slots():
                 send_all(
                     f"🙂 OPEN investment in Group B!\n"
                     f"📈 Currently **{pct_value}%** filled ⚡\n"
-                    f"💸 {context_line}\n"
+                    f"💸 {context_line}\n\n"
                     f"📊 Group A - {pct_value_a_str} filled\n"
                     f"💵 {context_line_a}\n"
                     f"{GROUP_B_URL} ⬅️ Invest now\n"
