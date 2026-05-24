@@ -75,67 +75,35 @@ def should_run_now(now: datetime) -> bool:
 # ----------------------------------------------------------------
 def parse_auth():
     auth = json.loads(AUTH_JSON)
-    # Cookie-Editor exports a plain array: [{name, value, domain, ...}, ...]
-    # Old bookmarklet exports: {"cookies": [...], "localStorage": {}, "sessionStorage": {}}
-    if isinstance(auth, list):
-        logging.info("Detected Cookie-Editor format (plain array).")
-        return auth, {}, {}
-    return auth.get("cookies", []), auth.get("localStorage", {}), auth.get("sessionStorage", {})
+    return auth.get("cookies", []), auth.get("localStorage", {})
 
 # ----------------------------------------------------------------
 # Browser helpers
 # ----------------------------------------------------------------
-async def setup_page(context, cookies_list, localstorage, sessionstorage=None):
+async def setup_page(context, cookies_list, localstorage):
     """
-    Inject cookies with full attributes (secure, httpOnly, sameSite, expires),
-    navigate to BASE_URL first so the SPA can trigger a token refresh,
-    then navigate to GROUP_B_URL.
+    Inject cookies first, then navigate directly to GROUP_B_URL,
+    inject localStorage (JWT token lives in 'state' key), and reload
+    so the React/SPA app bootstraps with the token already present.
     """
-    SAME_SITE_MAP = {
-        "strict":         "Strict",
-        "lax":            "Lax",
-        "no_restriction": "None",
-        "none":           "None",
-    }
-
-    cookies = []
-    for c in cookies_list:
-        if not c.get("name") or not c.get("value"):
-            continue
-        domain = c.get("domain", "investor.scrambleup.com")
-        # Keep leading dot for domain-wide cookies; strip for hostOnly
-        if c.get("hostOnly", False):
-            domain = domain.lstrip(".")
-        cookie = {
-            "name":     c["name"],
-            "value":    c["value"],
-            "domain":   domain,
-            "path":     c.get("path", "/"),
-            "secure":   c.get("secure", False),
-            "httpOnly": c.get("httpOnly", False),
+    cookies = [
+        {
+            "name":   c["name"],
+            "value":  c["value"],
+            "domain": c.get("domain", "investor.scrambleup.com").lstrip("."),
+            "path":   c.get("path", "/"),
         }
-        same_site = (c.get("sameSite") or "").lower()
-        if same_site in SAME_SITE_MAP:
-            cookie["sameSite"] = SAME_SITE_MAP[same_site]
-        if c.get("expirationDate"):
-            cookie["expires"] = int(c["expirationDate"])
-        cookies.append(cookie)
-
+        for c in cookies_list if c.get("name") and c.get("value")
+    ]
     if cookies:
         await context.add_cookies(cookies)
         logging.info("Injected %d cookies.", len(cookies))
 
     page = await context.new_page()
 
-    # Hit BASE_URL first — lets the SPA detect the refresh_token cookie
-    # and exchange it for a fresh access_token before we navigate to the target
-    await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
-    try:
-        await page.wait_for_load_state("networkidle", timeout=10000)
-    except PlaywrightTimeoutError:
-        pass
-    await page.wait_for_timeout(2000)
-    logging.info("After BASE_URL — current URL: %s", page.url)
+    # Navigate directly to the target page (not BASE_URL first)
+    # so localStorage is injected on the same origin the app will use
+    await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
 
     if localstorage:
         await page.evaluate(
@@ -144,15 +112,8 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage=None):
         )
         logging.info("Injected %d localStorage keys.", len(localstorage))
 
-    if sessionstorage:
-        await page.evaluate(
-            "(data) => { for (const [k,v] of Object.entries(data)) sessionStorage.setItem(k,v); }",
-            sessionstorage,
-        )
-        logging.info("Injected %d sessionStorage keys.", len(sessionstorage))
-
-    # Now navigate to the target page
-    await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
+    # Reload so the SPA re-initialises and picks up the injected JWT from localStorage
+    await page.reload(wait_until="domcontentloaded", timeout=60000)
 
     return page
 
@@ -227,10 +188,10 @@ async def check_slots():
     logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
 
     try:
-        cookies_list, localstorage, sessionstorage = parse_auth()
+        cookies_list, localstorage = parse_auth()
         logging.info(
-            "Loaded %d cookies, %d localStorage keys, %d sessionStorage keys.",
-            len(cookies_list), len(localstorage), len(sessionstorage)
+            "Loaded %d cookies and %d localStorage keys.",
+            len(cookies_list), len(localstorage)
         )
     except Exception as e:
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
@@ -241,7 +202,13 @@ async def check_slots():
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            page = await setup_page(context, cookies_list, localstorage, sessionstorage)
+            page = await setup_page(context, cookies_list, localstorage)
+
+            # Wait for the SPA to settle after reload
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15000)
+            except PlaywrightTimeoutError:
+                logging.warning("networkidle timeout — continuing anyway.")
 
             await page.wait_for_timeout(2000)
             logging.info("Current URL: %s", page.url)
