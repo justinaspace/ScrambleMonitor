@@ -17,7 +17,7 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 BASE_URL        = "https://investor.scrambleup.com"
-API_BASE        = "https://investor.scrambleup.com/api"
+API_REFRESH_URL = "https://investor.scrambleup.com/api/token/refresh/"
 TZ              = ZoneInfo("Europe/Vilnius")
 USER_AGENT      = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -74,61 +74,65 @@ def parse_auth():
     return auth.get("cookies", []), auth.get("localStorage", {}), auth.get("sessionStorage", {})
 
 def cookies_as_dict(cookies_list):
-    """Convert cookie list to simple name→value dict for requests lib."""
     return {c["name"]: c["value"] for c in cookies_list if c.get("name") and c.get("value")}
 
 # ----------------------------------------------------------------
-# Try to refresh access token via API before launching browser
+# Token refresh
 # ----------------------------------------------------------------
 def try_api_refresh(cookies_list):
     """
-    Attempt to get a fresh access_token by calling the JWT refresh endpoint.
-    Returns the new access_token string, or None if it fails.
-    Tries common Django SimpleJWT endpoint patterns.
+    Get a fresh access_token using the refresh_token cookie.
+    The endpoint exists (returned 400 previously) — we try two approaches:
+    1. Cookie-only POST (server reads refresh_token from the httpOnly cookie)
+    2. Token in request body as fallback
     """
     cookie_dict = cookies_as_dict(cookies_list)
     refresh_token_val = cookie_dict.get("refresh_token")
 
     if not refresh_token_val:
-        logging.warning("No refresh_token cookie found — skipping API refresh.")
+        logging.warning("No refresh_token cookie found.")
         return None
 
     headers = {
-        "User-Agent":   USER_AGENT,
-        "Content-Type": "application/json",
-        "Referer":      BASE_URL,
-        "Origin":       BASE_URL,
+        "User-Agent": USER_AGENT,
+        "Referer":    BASE_URL,
+        "Origin":     BASE_URL,
     }
 
-    # Try common refresh endpoint patterns
-    endpoints = [
-        f"{API_BASE}/token/refresh/",
-        f"{API_BASE}/auth/token/refresh/",
-        f"{API_BASE}/auth/refresh/",
-        f"{BASE_URL}/auth/token/refresh/",
-    ]
+    # Attempt 1: cookie-only (no body) — server reads httpOnly cookie
+    try:
+        r = req_lib.post(API_REFRESH_URL, cookies=cookie_dict, headers=headers, timeout=10)
+        logging.info("Refresh cookie-only → %d | %s", r.status_code, r.text[:200])
+        if r.status_code == 200:
+            data = r.json()
+            token = data.get("access") or data.get("access_token")
+            if token:
+                logging.info("Got fresh access_token (cookie-only).")
+                return token
+    except Exception as e:
+        logging.warning("Refresh cookie-only failed: %s", e)
 
-    for url in endpoints:
-        try:
-            # Some servers read refresh token from cookie, others from body
-            response = req_lib.post(
-                url,
-                json={"refresh": refresh_token_val},
-                cookies=cookie_dict,
-                headers=headers,
-                timeout=10,
-            )
-            logging.info("Refresh endpoint %s → %d", url, response.status_code)
-            if response.status_code == 200:
-                data = response.json()
-                token = data.get("access") or data.get("access_token")
-                if token:
-                    logging.info("Got fresh access_token from %s", url)
-                    return token
-        except Exception as e:
-            logging.warning("Refresh attempt failed for %s: %s", url, e)
+    # Attempt 2: token in body
+    try:
+        headers["Content-Type"] = "application/json"
+        r = req_lib.post(
+            API_REFRESH_URL,
+            json={"refresh": refresh_token_val},
+            cookies=cookie_dict,
+            headers=headers,
+            timeout=10,
+        )
+        logging.info("Refresh body → %d | %s", r.status_code, r.text[:200])
+        if r.status_code == 200:
+            data = r.json()
+            token = data.get("access") or data.get("access_token")
+            if token:
+                logging.info("Got fresh access_token (body).")
+                return token
+    except Exception as e:
+        logging.warning("Refresh body failed: %s", e)
 
-    logging.warning("All refresh endpoints failed.")
+    logging.warning("Both refresh attempts failed.")
     return None
 
 # ----------------------------------------------------------------
@@ -143,9 +147,14 @@ SAME_SITE_MAP = {
 
 async def setup_page(context, cookies_list, localstorage, sessionstorage, access_token=None):
     """
-    Inject all cookies with full attributes, optionally inject a fresh
-    access_token into localStorage state, then navigate to GROUP_B_URL.
+    Key insight from network logs: The React app does a PURE localStorage check
+    before making any API calls. If no valid access_token is in localStorage,
+    it redirects to /auth immediately.
+
+    Fix: use add_init_script() to inject the token BEFORE React runs,
+    so it finds a valid token from the very first check.
     """
+    # 1. Inject all cookies with full attributes
     cookies = []
     for c in cookies_list:
         if not c.get("name") or not c.get("value"):
@@ -174,64 +183,50 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage, access
 
     page = await context.new_page()
 
-    # Log all API/auth network calls for diagnostics
+    # Log relevant network calls
     async def on_response(response):
         url = response.url
         if any(k in url for k in ("/api/", "/auth/", "token", "invest", "group")):
             logging.info("NET %d %s", response.status, url)
     page.on("response", on_response)
 
-    # Navigate to BASE_URL first
-    await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
-    try:
-        await page.wait_for_load_state("networkidle", timeout=10000)
-    except PlaywrightTimeoutError:
-        pass
-    await page.wait_for_timeout(2000)
-    logging.info("After BASE_URL — current URL: %s", page.url)
-
-    # Inject localStorage/sessionStorage
-    if localstorage:
-        await page.evaluate(
-            "(data) => { for (const [k,v] of Object.entries(data)) localStorage.setItem(k,v); }",
-            localstorage,
-        )
-        logging.info("Injected %d localStorage keys.", len(localstorage))
-
-    if sessionstorage:
-        await page.evaluate(
-            "(data) => { for (const [k,v] of Object.entries(data)) sessionStorage.setItem(k,v); }",
-            sessionstorage,
-        )
-
-    # If we got a fresh access_token from the API, inject it into the
-    # React app's state in localStorage so the SPA sees it as authenticated
+    # 2. If we have a fresh access_token, inject it via init_script
+    #    This runs BEFORE any React code, so the SPA finds a valid token
     if access_token:
-        logging.info("Injecting fresh access_token into localStorage state.")
-        await page.evaluate(
-            """(token) => {
-                const state = JSON.parse(localStorage.getItem('state') || '{"userStore":{}}');
-                state.userStore = state.userStore || {};
-                state.userStore.token = { access_token: token };
-                localStorage.setItem('state', JSON.stringify(state));
-            }""",
-            access_token,
-        )
-        # Reload so the SPA picks up the injected token
-        await page.reload(wait_until="domcontentloaded", timeout=60000)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10000)
-        except PlaywrightTimeoutError:
-            pass
-        await page.wait_for_timeout(2000)
-        logging.info("After token inject + reload — URL: %s", page.url)
+        logging.info("Injecting access_token via init_script (before React loads).")
+        token_json = json.dumps(access_token)
+        await page.add_init_script(f"""
+            (function() {{
+                try {{
+                    var raw = localStorage.getItem('state');
+                    var state = raw ? JSON.parse(raw) : {{}};
+                    if (!state.userStore) state.userStore = {{}};
+                    state.userStore.token = {{ access_token: {token_json} }};
+                    localStorage.setItem('state', JSON.stringify(state));
+                    console.log('Injected access_token into localStorage');
+                }} catch(e) {{
+                    console.error('Token injection failed:', e);
+                }}
+            }})();
+        """)
 
-    # Navigate to the target page
+    # 3. Also inject any localStorage/sessionStorage from the auth export
+    if localstorage:
+        await page.add_init_script(f"""
+            (function() {{
+                var data = {json.dumps(localstorage)};
+                for (var k in data) {{
+                    if (k !== 'state') localStorage.setItem(k, data[k]);
+                }}
+            }})();
+        """)
+
+    # 4. Navigate directly to the investing page
     await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
     try:
-        await page.wait_for_load_state("networkidle", timeout=10000)
+        await page.wait_for_load_state("networkidle", timeout=15000)
     except PlaywrightTimeoutError:
-        pass
+        logging.warning("networkidle timeout — continuing.")
 
     return page
 
@@ -299,8 +294,10 @@ async def check_slots():
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
-    # Try to get a fresh access_token via the refresh API before launching browser
+    # Get fresh access_token via refresh API
     access_token = try_api_refresh(cookies_list)
+    if not access_token:
+        logging.warning("Could not get fresh access_token — will try with cookies only.")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -315,7 +312,7 @@ async def check_slots():
             logging.info("Current URL: %s", page.url)
 
             if is_login_url(page.url):
-                logging.warning("Redirected to login URL: %s", page.url)
+                logging.warning("Still on login URL — auth failed.")
                 send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Copy here")
                 return
 
