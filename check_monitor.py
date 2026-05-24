@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import asyncio
 import logging
 import calendar
@@ -17,14 +18,12 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 BASE_URL        = "https://investor.scrambleup.com"
-API_REFRESH_URL = "https://investor.scrambleup.com/api/token/refresh/"
 TZ              = ZoneInfo("Europe/Vilnius")
 USER_AGENT      = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
-# Confirmed correct API version header from brute-force discovery
 API_VERSION_HEADER = {"X-Api-Version": "1"}
 
 logging.basicConfig(
@@ -78,87 +77,55 @@ def parse_auth():
 def cookies_as_dict(cookies_list):
     return {c["name"]: c["value"] for c in cookies_list if c.get("name") and c.get("value")}
 
-# ----------------------------------------------------------------
-# Token refresh
-# ----------------------------------------------------------------
 def decode_jwt_payload(token: str) -> dict:
-    """Decode JWT payload without signature verification (for logging only)."""
     try:
         payload_b64 = token.split(".")[1]
         padding = 4 - len(payload_b64) % 4
         payload_b64 += "=" * (padding % 4)
-        import base64
         return json.loads(base64.b64decode(payload_b64))
     except Exception:
         return {}
 
-def try_api_refresh(cookies_list):
+# ----------------------------------------------------------------
+# Create a temporary access token
+# ----------------------------------------------------------------
+def create_temp_access_token(cookies_list):
     """
-    Get a fresh access_token using the refresh_token cookie.
-    X-Api-Version: 1 is the confirmed correct header.
-    Returns (access_token, new_refresh_token_or_None).
+    Creates a structurally-valid JWT with a short expiry (3 minutes).
+    The client does NOT verify the signature - only checks expiry.
+    This lets the React app initialize instead of immediately redirecting
+    to /auth, giving it a chance to make API calls which will 401,
+    triggering the app's own refresh call (which includes the fingerprint).
     """
+    now = int(datetime.now(TZ).timestamp())
+
+    # Extract user_id from shared_user cookie if available
+    user_id = "25408"
     cookie_dict = cookies_as_dict(cookies_list)
-    refresh_token_val = cookie_dict.get("refresh_token")
-    if not refresh_token_val:
-        logging.warning("No refresh_token cookie found.")
-        return None, None
+    shared_user_raw = cookie_dict.get("shared_user", "")
+    try:
+        import urllib.parse
+        shared_user = json.loads(urllib.parse.unquote(shared_user_raw))
+        user_id = str(shared_user.get("id", user_id))
+    except Exception:
+        pass
 
-    # Show token age so we know if it's fresh enough
-    payload = decode_jwt_payload(refresh_token_val)
-    if payload:
-        iat = payload.get("iat", 0)
-        age_hours = (datetime.now(TZ).timestamp() - iat) / 3600
-        logging.info("refresh_token age: %.1f hours (issued at %s)",
-                     age_hours,
-                     datetime.fromtimestamp(iat, TZ).strftime("%H:%M %d/%m"))
-
-    headers = {
-        "User-Agent":   USER_AGENT,
-        "Referer":      BASE_URL,
-        "Origin":       BASE_URL,
-        "Content-Type": "application/json",
-        **API_VERSION_HEADER,
+    payload = {
+        "token_type": "access",
+        "exp": now + 180,   # 3 minutes — enough for React to initialize
+        "iat": now,
+        "jti": "temp_for_fingerprint_flow",
+        "user_id": user_id,
     }
 
-    try:
-        r = req_lib.post(
-            API_REFRESH_URL,
-            json={"refresh": refresh_token_val},
-            cookies=cookie_dict,
-            headers=headers,
-            timeout=15,
-        )
-        logging.info("Refresh → %d | %s", r.status_code, r.text[:150])
+    def b64(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
-        if r.status_code == 200:
-            data = r.json()
-            access_token = data.get("access") or data.get("access_token")
-            new_refresh   = data.get("refresh")  # returned if server rotates tokens
-            if new_refresh:
-                logging.info("Server returned a new refresh_token (rotation detected).")
-            logging.info("Got fresh access_token ✓")
-            return access_token, new_refresh
+    header  = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    payload_enc = b64(json.dumps(payload, separators=(",", ":")).encode())
+    fake_sig = b64(b"fakesig_client_does_not_verify")
 
-        elif r.status_code == 401:
-            err = r.json() if r.text else {}
-            code = err.get("code", "")
-            if code == "token_not_valid":
-                logging.warning(
-                    "refresh_token is blacklisted or expired. "
-                    "Please re-export cookies with Cookie-Editor and update SCRAMBLE_AUTH."
-                )
-                send_all(
-                    f"🔐 Session expired ⚠️\n"
-                    f"Please re-export cookies with Cookie-Editor.\n"
-                    f"{GROUP_B_URL} ⬅️ Copy here"
-                )
-            return None, None
-
-    except Exception as e:
-        logging.error("Refresh request failed: %s", e)
-
-    return None, None
+    return f"{header}.{payload_enc}.{fake_sig}"
 
 # ----------------------------------------------------------------
 # Browser helpers
@@ -170,8 +137,8 @@ SAME_SITE_MAP = {
     "none":           "None",
 }
 
-async def setup_page(context, cookies_list, localstorage, access_token=None):
-    # Inject all cookies with full attributes
+async def setup_page(context, cookies_list, localstorage):
+    # 1. Inject all cookies
     cookies = []
     for c in cookies_list:
         if not c.get("name") or not c.get("value"):
@@ -200,53 +167,106 @@ async def setup_page(context, cookies_list, localstorage, access_token=None):
 
     page = await context.new_page()
 
-    # Intercept all API calls — add the confirmed version header
+    # 2. Intercept all /api/ requests — add X-Api-Version: 1
     async def add_version_header(route):
         headers = {**route.request.headers, **API_VERSION_HEADER}
         await route.continue_(headers=headers)
     await page.route("**/api/**", add_version_header)
 
-    # Log relevant network responses
+    # 3. Listen for the browser's own refresh call
+    #    The browser JS includes the fingerprint; we just intercept the response.
+    real_token = {"value": None}
+    refresh_done = asyncio.Event()
+
+    async def on_request(request):
+        if "/api/token/refresh/" in request.url:
+            logging.info("Browser made refresh REQUEST → headers: %s | body: %s",
+                         {k: v for k, v in request.headers.items()
+                          if any(x in k.lower() for x in ("version", "finger", "auth", "content"))},
+                         (request.post_data or "")[:200])
+
     async def on_response(response):
-        url = response.url
-        if any(k in url for k in ("/api/", "token", "invest", "group")):
-            logging.info("NET %d %s", response.status, url)
+        if "/api/token/refresh/" in response.url:
+            try:
+                data = await response.json()
+                logging.info("Browser refresh RESPONSE → %d | %s",
+                             response.status, str(data)[:150])
+                if response.status == 200:
+                    token = data.get("access") or data.get("access_token")
+                    if token:
+                        real_token["value"] = token
+                        refresh_done.set()
+            except Exception as e:
+                logging.warning("Could not parse refresh response: %s", e)
+
+    page.on("request", on_request)
     page.on("response", on_response)
 
-    # Inject access_token into localStorage BEFORE React loads
-    if access_token:
-        logging.info("Injecting access_token via init_script.")
-        token_json = json.dumps(access_token)
-        await page.add_init_script(f"""
+    # Also log relevant NET responses
+    async def on_net_response(response):
+        url = response.url
+        if any(k in url for k in ("/api/", "invest", "group")):
+            logging.info("NET %d %s", response.status, url)
+    page.on("response", on_net_response)
+
+    # 4. Inject temp token via init_script (BEFORE React loads)
+    #    This passes the client-side auth check so React doesn't immediately redirect.
+    #    React will then make data API calls → server returns 401 (fake token) →
+    #    React's 401 interceptor calls refresh (with fingerprint) → we capture real token.
+    temp_token = create_temp_access_token(cookies_list)
+    token_json = json.dumps(temp_token)
+    logging.info("Injecting temp access_token (3 min expiry) to allow React to initialize.")
+    await page.add_init_script(f"""
+        (function() {{
+            try {{
+                var raw = localStorage.getItem('state');
+                var s = raw ? JSON.parse(raw) : {{}};
+                if (!s.userStore) s.userStore = {{}};
+                s.userStore.token = {{ access_token: {token_json} }};
+                localStorage.setItem('state', JSON.stringify(s));
+            }} catch(e) {{ console.error('Temp token injection failed:', e); }}
+        }})();
+    """)
+
+    # 5. Navigate to investing page
+    await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
+
+    # 6. Wait for React to make a refresh call (up to 60 seconds)
+    #    React will call refresh when:
+    #    (a) A data API call returns 401 (fake token rejected by server) — fast
+    #    (b) Pre-emptive refresh timer fires (when token is about to expire) — up to 3 min
+    logging.info("Waiting for React to make its own refresh call (with fingerprint)…")
+    try:
+        await asyncio.wait_for(refresh_done.wait(), timeout=60)
+    except asyncio.TimeoutError:
+        logging.warning("React did not make a refresh call within 60 seconds.")
+
+    # 7. If we captured the real token, inject it and reload
+    if real_token["value"]:
+        logging.info("Got real access_token from browser refresh! Injecting and reloading.")
+        real_json = json.dumps(real_token["value"])
+        await page.evaluate(f"""
             (function() {{
                 try {{
                     var raw = localStorage.getItem('state');
-                    var state = raw ? JSON.parse(raw) : {{}};
-                    if (!state.userStore) state.userStore = {{}};
-                    state.userStore.token = {{ access_token: {token_json} }};
-                    localStorage.setItem('state', JSON.stringify(state));
-                }} catch(e) {{ console.error('Token injection failed:', e); }}
+                    var s = raw ? JSON.parse(raw) : {{}};
+                    if (!s.userStore) s.userStore = {{}};
+                    s.userStore.token = {{ access_token: {real_json} }};
+                    localStorage.setItem('state', JSON.stringify(s));
+                }} catch(e) {{}}
             }})();
         """)
-
-    # Also restore other localStorage keys from the export
-    if localstorage:
-        ls_json = json.dumps(
-            {k: v for k, v in localstorage.items() if k != "state"}
-        )
-        await page.add_init_script(f"""
-            (function() {{
-                var data = {ls_json};
-                for (var k in data) {{ localStorage.setItem(k, data[k]); }}
-            }})();
-        """)
-
-    # Navigate directly to the investing page
-    await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
-    try:
-        await page.wait_for_load_state("networkidle", timeout=15000)
-    except PlaywrightTimeoutError:
-        logging.warning("networkidle timeout — continuing.")
+        await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=15000)
+        except PlaywrightTimeoutError:
+            pass
+    else:
+        # No real token captured — continue with whatever state we have
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except PlaywrightTimeoutError:
+            pass
 
     return page
 
@@ -314,18 +334,12 @@ async def check_slots():
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
-    # Get fresh access_token via confirmed X-Api-Version: 1 header
-    access_token, new_refresh = try_api_refresh(cookies_list)
-    if not access_token:
-        # send_all already called inside try_api_refresh if token blacklisted
-        return
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            page = await setup_page(context, cookies_list, localstorage, access_token)
+            page = await setup_page(context, cookies_list, localstorage)
 
             await page.wait_for_timeout(2000)
             logging.info("Current URL: %s", page.url)
