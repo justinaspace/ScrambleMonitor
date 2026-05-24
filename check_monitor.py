@@ -91,39 +91,51 @@ def decode_jwt_payload(token: str) -> dict:
 # ----------------------------------------------------------------
 def create_temp_access_token(cookies_list):
     """
-    Creates a structurally-valid JWT with a short expiry (3 minutes).
-    The client does NOT verify the signature - only checks expiry.
-    This lets the React app initialize instead of immediately redirecting
-    to /auth, giving it a chance to make API calls which will 401,
-    triggering the app's own refresh call (which includes the fingerprint).
+    Creates a structurally-valid JWT with full user payload.
+    The real access_token contains a 'user' object — without it,
+    React's userStore doesn't initialize and it redirects to /auth
+    even if the token hasn't expired.
     """
     now = int(datetime.now(TZ).timestamp())
-
-    # Extract user_id from shared_user cookie if available
-    user_id = "25408"
     cookie_dict = cookies_as_dict(cookies_list)
+
+    # Extract full user data from shared_user cookie
+    user_id = "25408"
+    user_obj = None
     shared_user_raw = cookie_dict.get("shared_user", "")
-    try:
-        import urllib.parse
-        shared_user = json.loads(urllib.parse.unquote(shared_user_raw))
-        user_id = str(shared_user.get("id", user_id))
-    except Exception:
-        pass
+    if shared_user_raw:
+        try:
+            import urllib.parse
+            user_obj = json.loads(urllib.parse.unquote(shared_user_raw))
+            user_id = str(user_obj.get("id", user_id))
+            logging.info("Built fake token for user_id=%s (%s)",
+                         user_id, user_obj.get("email", ""))
+        except Exception as e:
+            logging.warning("Could not parse shared_user cookie: %s", e)
+
+    if not user_obj:
+        user_obj = {
+            "id": int(user_id),
+            "role": "investor",
+            "status": "verified",
+            "is_new_user": False,
+        }
 
     payload = {
         "token_type": "access",
-        "exp": now + 180,   # 3 minutes — enough for React to initialize
+        "exp": now + 28800,   # 8 hours — same as real tokens
         "iat": now,
-        "jti": "temp_for_fingerprint_flow",
+        "jti": f"temp_{hex(now)[2:]}",
         "user_id": user_id,
+        "user": user_obj,      # ← THIS is what React reads to init the user store
     }
 
     def b64(data: bytes) -> str:
         return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
-    header  = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    header      = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
     payload_enc = b64(json.dumps(payload, separators=(",", ":")).encode())
-    fake_sig = b64(b"fakesig_client_does_not_verify")
+    fake_sig    = b64(b"fakesig_client_does_not_verify")
 
     return f"{header}.{payload_enc}.{fake_sig}"
 
