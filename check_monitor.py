@@ -17,12 +17,15 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 BASE_URL        = "https://investor.scrambleup.com"
+API_REFRESH_URL = "https://investor.scrambleup.com/api/token/refresh/"
 TZ              = ZoneInfo("Europe/Vilnius")
 USER_AGENT      = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
+# Confirmed correct API version header from brute-force discovery
+API_VERSION_HEADER = {"X-Api-Version": "1"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,14 +79,13 @@ def cookies_as_dict(cookies_list):
     return {c["name"]: c["value"] for c in cookies_list if c.get("name") and c.get("value")}
 
 # ----------------------------------------------------------------
-# Token refresh — tries all common API version header combinations
+# Token refresh
 # ----------------------------------------------------------------
 def try_api_refresh(cookies_list):
     """
-    Server requires an API version header.
-    Error was: {"message": "Missing API version header"}
-    We try all common header name + value combinations until one works.
-    Also returns the winning header so Playwright can use it too.
+    Get a fresh access_token using the refresh_token cookie.
+    X-Api-Version: 1 is the confirmed correct header.
+    Returns (access_token, new_refresh_token_or_None).
     """
     cookie_dict = cookies_as_dict(cookies_list)
     refresh_token_val = cookie_dict.get("refresh_token")
@@ -91,68 +93,51 @@ def try_api_refresh(cookies_list):
         logging.warning("No refresh_token cookie found.")
         return None, None
 
-    base_headers = {
+    headers = {
         "User-Agent":   USER_AGENT,
         "Referer":      BASE_URL,
         "Origin":       BASE_URL,
         "Content-Type": "application/json",
+        **API_VERSION_HEADER,
     }
 
-    # All plausible version header name + value combinations
-    version_candidates = [
-        ("X-Api-Version", "1"),
-        ("X-Api-Version", "2"),
-        ("X-Api-Version", "3"),
-        ("X-API-Version", "1"),
-        ("X-API-Version", "2"),
-        ("Api-Version",   "1"),
-        ("Api-Version",   "2"),
-        ("X-Version",     "1"),
-        ("X-Version",     "2"),
-        ("Accept",        "application/json; version=1"),
-        ("Accept",        "application/json; version=2"),
-        ("X-App-Version", "1"),
-        ("X-App-Version", "2"),
-    ]
+    try:
+        r = req_lib.post(
+            API_REFRESH_URL,
+            json={"refresh": refresh_token_val},
+            cookies=cookie_dict,
+            headers=headers,
+            timeout=15,
+        )
+        logging.info("Refresh → %d | %s", r.status_code, r.text[:150])
 
-    # Try URL versioning too
-    refresh_urls = [
-        f"{BASE_URL}/api/token/refresh/",
-        f"{BASE_URL}/api/v1/token/refresh/",
-        f"{BASE_URL}/api/v2/token/refresh/",
-    ]
+        if r.status_code == 200:
+            data = r.json()
+            access_token = data.get("access") or data.get("access_token")
+            new_refresh   = data.get("refresh")  # returned if server rotates tokens
+            if new_refresh:
+                logging.info("Server returned a new refresh_token (rotation detected).")
+            logging.info("Got fresh access_token ✓")
+            return access_token, new_refresh
 
-    for url in refresh_urls:
-        for header_name, header_value in version_candidates:
-            headers = {**base_headers, header_name: header_value}
-            try:
-                # Try with body first (most common for JWT refresh)
-                r = req_lib.post(
-                    url,
-                    json={"refresh": refresh_token_val},
-                    cookies=cookie_dict,
-                    headers=headers,
-                    timeout=10,
+        elif r.status_code == 401:
+            err = r.json() if r.text else {}
+            code = err.get("code", "")
+            if code == "token_not_valid":
+                logging.warning(
+                    "refresh_token is blacklisted or expired. "
+                    "Please re-export cookies with Cookie-Editor and update SCRAMBLE_AUTH."
                 )
-                logging.info(
-                    "Refresh %s [%s: %s] → %d | %s",
-                    url.split("/api")[-1], header_name, header_value,
-                    r.status_code, r.text[:80]
+                send_all(
+                    f"🔐 Session expired ⚠️\n"
+                    f"Please re-export cookies with Cookie-Editor.\n"
+                    f"{GROUP_B_URL} ⬅️ Copy here"
                 )
-                if r.status_code == 200:
-                    data = r.json()
-                    token = data.get("access") or data.get("access_token")
-                    if token:
-                        winning_header = (header_name, header_value)
-                        logging.info(
-                            "SUCCESS: access_token via [%s: %s]",
-                            header_name, header_value
-                        )
-                        return token, winning_header
-            except Exception as e:
-                logging.warning("Refresh attempt error: %s", e)
+            return None, None
 
-    logging.warning("All refresh attempts failed.")
+    except Exception as e:
+        logging.error("Refresh request failed: %s", e)
+
     return None, None
 
 # ----------------------------------------------------------------
@@ -165,8 +150,7 @@ SAME_SITE_MAP = {
     "none":           "None",
 }
 
-async def setup_page(context, cookies_list, localstorage, sessionstorage,
-                     access_token=None, api_version_header=None):
+async def setup_page(context, cookies_list, localstorage, access_token=None):
     # Inject all cookies with full attributes
     cookies = []
     for c in cookies_list:
@@ -196,15 +180,11 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage,
 
     page = await context.new_page()
 
-    # Intercept all API calls and add the version header
-    # This ensures the React app's own API calls also work
-    if api_version_header:
-        h_name, h_value = api_version_header
-        logging.info("Intercepting API calls to add [%s: %s]", h_name, h_value)
-        async def add_version_header(route):
-            headers = {**route.request.headers, h_name: h_value}
-            await route.continue_(headers=headers)
-        await page.route("**/api/**", add_version_header)
+    # Intercept all API calls — add the confirmed version header
+    async def add_version_header(route):
+        headers = {**route.request.headers, **API_VERSION_HEADER}
+        await route.continue_(headers=headers)
+    await page.route("**/api/**", add_version_header)
 
     # Log relevant network responses
     async def on_response(response):
@@ -213,7 +193,7 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage,
             logging.info("NET %d %s", response.status, url)
     page.on("response", on_response)
 
-    # Inject access_token via init_script BEFORE React loads
+    # Inject access_token into localStorage BEFORE React loads
     if access_token:
         logging.info("Injecting access_token via init_script.")
         token_json = json.dumps(access_token)
@@ -229,7 +209,7 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage,
             }})();
         """)
 
-    # Inject other localStorage keys from export (skip 'state' — we set it above)
+    # Also restore other localStorage keys from the export
     if localstorage:
         ls_json = json.dumps(
             {k: v for k, v in localstorage.items() if k != "state"}
@@ -314,19 +294,18 @@ async def check_slots():
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
-    access_token, api_version_header = try_api_refresh(cookies_list)
+    # Get fresh access_token via confirmed X-Api-Version: 1 header
+    access_token, new_refresh = try_api_refresh(cookies_list)
     if not access_token:
-        logging.warning("No access_token obtained — proceeding without it.")
+        # send_all already called inside try_api_refresh if token blacklisted
+        return
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            page = await setup_page(
-                context, cookies_list, localstorage, sessionstorage,
-                access_token, api_version_header
-            )
+            page = await setup_page(context, cookies_list, localstorage, access_token)
 
             await page.wait_for_timeout(2000)
             logging.info("Current URL: %s", page.url)
@@ -339,7 +318,7 @@ async def check_slots():
             try:
                 pct_text, group_b_context, group_a_pct, group_a_context = await get_groups(page)
             except PlaywrightTimeoutError:
-                logging.warning("Group selector not found — session expired.")
+                logging.warning("Group selector not found.")
                 send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Copy here")
                 return
 
