@@ -75,16 +75,21 @@ def should_run_now(now: datetime) -> bool:
 # ----------------------------------------------------------------
 def parse_auth():
     auth = json.loads(AUTH_JSON)
-    return auth.get("cookies", []), auth.get("localStorage", {})
+    # Cookie-Editor exports a plain array: [{name, value, domain, ...}, ...]
+    # Old bookmarklet exports: {"cookies": [...], "localStorage": {}, "sessionStorage": {}}
+    if isinstance(auth, list):
+        logging.info("Detected Cookie-Editor format (plain array).")
+        return auth, {}, {}
+    return auth.get("cookies", []), auth.get("localStorage", {}), auth.get("sessionStorage", {})
 
 # ----------------------------------------------------------------
 # Browser helpers
 # ----------------------------------------------------------------
-async def setup_page(context, cookies_list, localstorage):
+async def setup_page(context, cookies_list, localstorage, sessionstorage=None):
     """
     Inject cookies first, then navigate directly to GROUP_B_URL,
-    inject localStorage (JWT token lives in 'state' key), and reload
-    so the React/SPA app bootstraps with the token already present.
+    inject localStorage and sessionStorage (JWT token may live in either),
+    then reload so the React/SPA app bootstraps with the token already present.
     """
     cookies = [
         {
@@ -101,8 +106,7 @@ async def setup_page(context, cookies_list, localstorage):
 
     page = await context.new_page()
 
-    # Navigate directly to the target page (not BASE_URL first)
-    # so localStorage is injected on the same origin the app will use
+    # Navigate directly to the target page so storage is injected on the right origin
     await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
 
     if localstorage:
@@ -112,7 +116,14 @@ async def setup_page(context, cookies_list, localstorage):
         )
         logging.info("Injected %d localStorage keys.", len(localstorage))
 
-    # Reload so the SPA re-initialises and picks up the injected JWT from localStorage
+    if sessionstorage:
+        await page.evaluate(
+            "(data) => { for (const [k,v] of Object.entries(data)) sessionStorage.setItem(k,v); }",
+            sessionstorage,
+        )
+        logging.info("Injected %d sessionStorage keys.", len(sessionstorage))
+
+    # Reload so the SPA re-initialises and picks up the injected tokens
     await page.reload(wait_until="domcontentloaded", timeout=60000)
 
     return page
@@ -188,10 +199,10 @@ async def check_slots():
     logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
 
     try:
-        cookies_list, localstorage = parse_auth()
+        cookies_list, localstorage, sessionstorage = parse_auth()
         logging.info(
-            "Loaded %d cookies and %d localStorage keys.",
-            len(cookies_list), len(localstorage)
+            "Loaded %d cookies, %d localStorage keys, %d sessionStorage keys.",
+            len(cookies_list), len(localstorage), len(sessionstorage)
         )
     except Exception as e:
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
@@ -202,7 +213,7 @@ async def check_slots():
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            page = await setup_page(context, cookies_list, localstorage)
+            page = await setup_page(context, cookies_list, localstorage, sessionstorage)
 
             # Wait for the SPA to settle after reload
             try:
