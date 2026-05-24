@@ -230,51 +230,71 @@ async def setup_page(context, cookies_list, localstorage):
     await page.add_init_script(f"""
         (function() {{
             try {{
-                // Intercept setItem to see if the app overwrites our token
-                var _origSet = localStorage.setItem.bind(localStorage);
-                localStorage.setItem = function(key, value) {{
-                    if (key === 'state') {{
-                        try {{
-                            var parsed = JSON.parse(value);
-                            var tok = parsed && parsed.userStore && parsed.userStore.token;
-                            console.log('APP setItem(state): token=' + (tok ? JSON.stringify(tok).substring(0,80) : 'NONE'));
-                        }} catch(e) {{
-                            console.log('APP setItem(state): raw=' + String(value).substring(0,100));
-                        }}
-                    }}
-                    return _origSet(key, value);
-                }};
-
                 // Inject our token
                 var raw = localStorage.getItem('state');
                 var s = raw ? JSON.parse(raw) : {{}};
                 if (!s.userStore) s.userStore = {{}};
                 s.userStore.token = {{ access_token: {token_json} }};
                 localStorage.setItem('state', JSON.stringify(s));
-
-                // Verify
-                var check = JSON.parse(localStorage.getItem('state'));
-                var tok = check.userStore.token.access_token;
-                var payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+                var payload = JSON.parse(atob({token_json}.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
                 console.log('Token injected: exp=' + payload.exp + ' now=' + Math.floor(Date.now()/1000) + ' valid=' + (payload.exp > Date.now()/1000));
 
-                // Add stack trace to replaceState
+                // Intercept Web Crypto to detect signature verification
+                if (crypto && crypto.subtle && crypto.subtle.verify) {{
+                    var _ov = crypto.subtle.verify.bind(crypto.subtle);
+                    crypto.subtle.verify = function(algo, key, sig, data) {{
+                        console.warn('CRYPTO.VERIFY: algo=' + JSON.stringify(algo));
+                        return _ov(algo, key, sig, data).then(function(r) {{
+                            console.warn('CRYPTO.VERIFY result: ' + r); return r;
+                        }});
+                    }};
+                }}
+
+                // Intercept ALL fetch to find hidden API calls
+                var _of = window.fetch.bind(window);
+                window.fetch = function(url, opts) {{
+                    var m = (opts && opts.method) || 'GET';
+                    if (String(url).indexOf('scrambleup') >= 0 || String(url).startsWith('/')) {{
+                        console.log('FETCH: ' + m + ' ' + url);
+                    }}
+                    return _of(url, opts).then(function(res) {{
+                        if (String(url).indexOf('scrambleup') >= 0 || String(url).startsWith('/')) {{
+                            console.log('FETCH RESP: ' + res.status + ' ' + url);
+                        }}
+                        return res;
+                    }});
+                }};
+
+                // BLOCK /auth redirect
                 var origReplace = history.replaceState.bind(history);
+                var origPush = history.pushState.bind(history);
                 history.replaceState = function(st, title, url) {{
                     if (url && String(url).includes('/auth')) {{
                         var stack = new Error().stack.split('\\n').slice(1,6).join(' | ');
-                        console.warn('NAVIGATE TO /auth via replaceState — stack: ' + stack);
+                        console.warn('BLOCKED replaceState /auth — stack: ' + stack);
+                        return;
                     }}
                     return origReplace(st, title, url);
                 }};
-                var origPush = history.pushState.bind(history);
                 history.pushState = function(st, title, url) {{
                     if (url && String(url).includes('/auth')) {{
                         var stack = new Error().stack.split('\\n').slice(1,6).join(' | ');
-                        console.warn('NAVIGATE TO /auth via pushState — stack: ' + stack);
+                        console.warn('BLOCKED pushState /auth — stack: ' + stack);
+                        return;
                     }}
                     return origPush(st, title, url);
                 }};
+
+                // Read bundle code at the redirect location
+                setTimeout(function() {{
+                    fetch('/assets/index-DJOaDmVS.js')
+                        .then(function(r) {{ return r.text(); }})
+                        .then(function(text) {{
+                            var chunk = text.substring(Math.max(0,11092-400), Math.min(text.length,11092+400));
+                            console.log('BUNDLE@11092: ' + chunk.substring(0,600));
+                        }})
+                        .catch(function(e) {{ console.log('Bundle err: '+e); }});
+                }}, 1000);
             }} catch(e) {{ console.error('Init script error:', e.message); }}
         }})();
     """)
