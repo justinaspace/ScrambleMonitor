@@ -17,7 +17,6 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 BASE_URL        = "https://investor.scrambleup.com"
-API_REFRESH_URL = "https://investor.scrambleup.com/api/token/refresh/"
 TZ              = ZoneInfo("Europe/Vilnius")
 USER_AGENT      = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -77,63 +76,84 @@ def cookies_as_dict(cookies_list):
     return {c["name"]: c["value"] for c in cookies_list if c.get("name") and c.get("value")}
 
 # ----------------------------------------------------------------
-# Token refresh
+# Token refresh — tries all common API version header combinations
 # ----------------------------------------------------------------
 def try_api_refresh(cookies_list):
     """
-    Get a fresh access_token using the refresh_token cookie.
-    The endpoint exists (returned 400 previously) — we try two approaches:
-    1. Cookie-only POST (server reads refresh_token from the httpOnly cookie)
-    2. Token in request body as fallback
+    Server requires an API version header.
+    Error was: {"message": "Missing API version header"}
+    We try all common header name + value combinations until one works.
+    Also returns the winning header so Playwright can use it too.
     """
     cookie_dict = cookies_as_dict(cookies_list)
     refresh_token_val = cookie_dict.get("refresh_token")
-
     if not refresh_token_val:
         logging.warning("No refresh_token cookie found.")
-        return None
+        return None, None
 
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Referer":    BASE_URL,
-        "Origin":     BASE_URL,
+    base_headers = {
+        "User-Agent":   USER_AGENT,
+        "Referer":      BASE_URL,
+        "Origin":       BASE_URL,
+        "Content-Type": "application/json",
     }
 
-    # Attempt 1: cookie-only (no body) — server reads httpOnly cookie
-    try:
-        r = req_lib.post(API_REFRESH_URL, cookies=cookie_dict, headers=headers, timeout=10)
-        logging.info("Refresh cookie-only → %d | %s", r.status_code, r.text[:200])
-        if r.status_code == 200:
-            data = r.json()
-            token = data.get("access") or data.get("access_token")
-            if token:
-                logging.info("Got fresh access_token (cookie-only).")
-                return token
-    except Exception as e:
-        logging.warning("Refresh cookie-only failed: %s", e)
+    # All plausible version header name + value combinations
+    version_candidates = [
+        ("X-Api-Version", "1"),
+        ("X-Api-Version", "2"),
+        ("X-Api-Version", "3"),
+        ("X-API-Version", "1"),
+        ("X-API-Version", "2"),
+        ("Api-Version",   "1"),
+        ("Api-Version",   "2"),
+        ("X-Version",     "1"),
+        ("X-Version",     "2"),
+        ("Accept",        "application/json; version=1"),
+        ("Accept",        "application/json; version=2"),
+        ("X-App-Version", "1"),
+        ("X-App-Version", "2"),
+    ]
 
-    # Attempt 2: token in body
-    try:
-        headers["Content-Type"] = "application/json"
-        r = req_lib.post(
-            API_REFRESH_URL,
-            json={"refresh": refresh_token_val},
-            cookies=cookie_dict,
-            headers=headers,
-            timeout=10,
-        )
-        logging.info("Refresh body → %d | %s", r.status_code, r.text[:200])
-        if r.status_code == 200:
-            data = r.json()
-            token = data.get("access") or data.get("access_token")
-            if token:
-                logging.info("Got fresh access_token (body).")
-                return token
-    except Exception as e:
-        logging.warning("Refresh body failed: %s", e)
+    # Try URL versioning too
+    refresh_urls = [
+        f"{BASE_URL}/api/token/refresh/",
+        f"{BASE_URL}/api/v1/token/refresh/",
+        f"{BASE_URL}/api/v2/token/refresh/",
+    ]
 
-    logging.warning("Both refresh attempts failed.")
-    return None
+    for url in refresh_urls:
+        for header_name, header_value in version_candidates:
+            headers = {**base_headers, header_name: header_value}
+            try:
+                # Try with body first (most common for JWT refresh)
+                r = req_lib.post(
+                    url,
+                    json={"refresh": refresh_token_val},
+                    cookies=cookie_dict,
+                    headers=headers,
+                    timeout=10,
+                )
+                logging.info(
+                    "Refresh %s [%s: %s] → %d | %s",
+                    url.split("/api")[-1], header_name, header_value,
+                    r.status_code, r.text[:80]
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    token = data.get("access") or data.get("access_token")
+                    if token:
+                        winning_header = (header_name, header_value)
+                        logging.info(
+                            "SUCCESS: access_token via [%s: %s]",
+                            header_name, header_value
+                        )
+                        return token, winning_header
+            except Exception as e:
+                logging.warning("Refresh attempt error: %s", e)
+
+    logging.warning("All refresh attempts failed.")
+    return None, None
 
 # ----------------------------------------------------------------
 # Browser helpers
@@ -145,16 +165,9 @@ SAME_SITE_MAP = {
     "none":           "None",
 }
 
-async def setup_page(context, cookies_list, localstorage, sessionstorage, access_token=None):
-    """
-    Key insight from network logs: The React app does a PURE localStorage check
-    before making any API calls. If no valid access_token is in localStorage,
-    it redirects to /auth immediately.
-
-    Fix: use add_init_script() to inject the token BEFORE React runs,
-    so it finds a valid token from the very first check.
-    """
-    # 1. Inject all cookies with full attributes
+async def setup_page(context, cookies_list, localstorage, sessionstorage,
+                     access_token=None, api_version_header=None):
+    # Inject all cookies with full attributes
     cookies = []
     for c in cookies_list:
         if not c.get("name") or not c.get("value"):
@@ -183,17 +196,26 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage, access
 
     page = await context.new_page()
 
-    # Log relevant network calls
+    # Intercept all API calls and add the version header
+    # This ensures the React app's own API calls also work
+    if api_version_header:
+        h_name, h_value = api_version_header
+        logging.info("Intercepting API calls to add [%s: %s]", h_name, h_value)
+        async def add_version_header(route):
+            headers = {**route.request.headers, h_name: h_value}
+            await route.continue_(headers=headers)
+        await page.route("**/api/**", add_version_header)
+
+    # Log relevant network responses
     async def on_response(response):
         url = response.url
-        if any(k in url for k in ("/api/", "/auth/", "token", "invest", "group")):
+        if any(k in url for k in ("/api/", "token", "invest", "group")):
             logging.info("NET %d %s", response.status, url)
     page.on("response", on_response)
 
-    # 2. If we have a fresh access_token, inject it via init_script
-    #    This runs BEFORE any React code, so the SPA finds a valid token
+    # Inject access_token via init_script BEFORE React loads
     if access_token:
-        logging.info("Injecting access_token via init_script (before React loads).")
+        logging.info("Injecting access_token via init_script.")
         token_json = json.dumps(access_token)
         await page.add_init_script(f"""
             (function() {{
@@ -203,25 +225,23 @@ async def setup_page(context, cookies_list, localstorage, sessionstorage, access
                     if (!state.userStore) state.userStore = {{}};
                     state.userStore.token = {{ access_token: {token_json} }};
                     localStorage.setItem('state', JSON.stringify(state));
-                    console.log('Injected access_token into localStorage');
-                }} catch(e) {{
-                    console.error('Token injection failed:', e);
-                }}
+                }} catch(e) {{ console.error('Token injection failed:', e); }}
             }})();
         """)
 
-    # 3. Also inject any localStorage/sessionStorage from the auth export
+    # Inject other localStorage keys from export (skip 'state' — we set it above)
     if localstorage:
+        ls_json = json.dumps(
+            {k: v for k, v in localstorage.items() if k != "state"}
+        )
         await page.add_init_script(f"""
             (function() {{
-                var data = {json.dumps(localstorage)};
-                for (var k in data) {{
-                    if (k !== 'state') localStorage.setItem(k, data[k]);
-                }}
+                var data = {ls_json};
+                for (var k in data) {{ localStorage.setItem(k, data[k]); }}
             }})();
         """)
 
-    # 4. Navigate directly to the investing page
+    # Navigate directly to the investing page
     await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
     try:
         await page.wait_for_load_state("networkidle", timeout=15000)
@@ -294,10 +314,9 @@ async def check_slots():
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH secret.\nError: {e}")
         return
 
-    # Get fresh access_token via refresh API
-    access_token = try_api_refresh(cookies_list)
+    access_token, api_version_header = try_api_refresh(cookies_list)
     if not access_token:
-        logging.warning("Could not get fresh access_token — will try with cookies only.")
+        logging.warning("No access_token obtained — proceeding without it.")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -305,7 +324,8 @@ async def check_slots():
 
         try:
             page = await setup_page(
-                context, cookies_list, localstorage, sessionstorage, access_token
+                context, cookies_list, localstorage, sessionstorage,
+                access_token, api_version_header
             )
 
             await page.wait_for_timeout(2000)
