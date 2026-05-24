@@ -179,30 +179,39 @@ async def setup_page(context, cookies_list, localstorage):
 
     page = await context.new_page()
 
-    # 2. Intercept all /api/ requests — add X-Api-Version: 1
+    # Log ALL console output — this will show us what React is checking
+    page.on("console", lambda msg: logging.info("CONSOLE [%s]: %s", msg.type, msg.text[:300]))
+    page.on("pageerror", lambda err: logging.info("PAGE ERROR: %s", str(err)[:300]))
+
+    # Intercept all /api/ requests — add X-Api-Version: 1
     async def add_version_header(route):
         headers = {**route.request.headers, **API_VERSION_HEADER}
         await route.continue_(headers=headers)
     await page.route("**/api/**", add_version_header)
 
-    # 3. Listen for the browser's own refresh call
-    #    The browser JS includes the fingerprint; we just intercept the response.
+    # Log ALL investor.scrambleup.com responses (not assets/locales)
+    async def on_response(response):
+        url = response.url
+        if "investor.scrambleup.com" in url and "assets" not in url and "locales" not in url:
+            logging.info("NET %d %s", response.status, url)
+    page.on("response", on_response)
+
+    # Listen for the browser's own refresh call
     real_token = {"value": None}
     refresh_done = asyncio.Event()
 
     async def on_request(request):
         if "/api/token/refresh/" in request.url:
-            logging.info("Browser made refresh REQUEST → headers: %s | body: %s",
+            logging.info("Browser refresh REQUEST headers: %s | body: %s",
                          {k: v for k, v in request.headers.items()
                           if any(x in k.lower() for x in ("version", "finger", "auth", "content"))},
-                         (request.post_data or "")[:200])
+                         (request.post_data or "")[:300])
 
-    async def on_response(response):
+    async def on_refresh_response(response):
         if "/api/token/refresh/" in response.url:
             try:
                 data = await response.json()
-                logging.info("Browser refresh RESPONSE → %d | %s",
-                             response.status, str(data)[:150])
+                logging.info("Browser refresh RESPONSE → %d | %s", response.status, str(data)[:200])
                 if response.status == 200:
                     token = data.get("access") or data.get("access_token")
                     if token:
@@ -212,31 +221,49 @@ async def setup_page(context, cookies_list, localstorage):
                 logging.warning("Could not parse refresh response: %s", e)
 
     page.on("request", on_request)
-    page.on("response", on_response)
+    page.on("response", on_refresh_response)
 
-    # Also log relevant NET responses
-    async def on_net_response(response):
-        url = response.url
-        if any(k in url for k in ("/api/", "invest", "group")):
-            logging.info("NET %d %s", response.status, url)
-    page.on("response", on_net_response)
-
-    # 4. Inject temp token via init_script (BEFORE React loads)
-    #    This passes the client-side auth check so React doesn't immediately redirect.
-    #    React will then make data API calls → server returns 401 (fake token) →
-    #    React's 401 interceptor calls refresh (with fingerprint) → we capture real token.
+    # Inject temp token + diagnostic logging via init_script (BEFORE React loads)
     temp_token = create_temp_access_token(cookies_list)
     token_json = json.dumps(temp_token)
-    logging.info("Injecting temp access_token (3 min expiry) to allow React to initialize.")
+    logging.info("Injecting temp access_token (8h expiry) + diagnostics.")
     await page.add_init_script(f"""
         (function() {{
             try {{
+                // Dump existing localStorage keys
+                var keys = [];
+                for (var i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+                console.log('LS keys before inject:', JSON.stringify(keys));
+
+                // Inject our token
                 var raw = localStorage.getItem('state');
                 var s = raw ? JSON.parse(raw) : {{}};
                 if (!s.userStore) s.userStore = {{}};
                 s.userStore.token = {{ access_token: {token_json} }};
                 localStorage.setItem('state', JSON.stringify(s));
-            }} catch(e) {{ console.error('Temp token injection failed:', e); }}
+
+                // Verify
+                var check = JSON.parse(localStorage.getItem('state'));
+                var tok = check.userStore.token.access_token;
+                var payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+                console.log('Token injected: exp=' + payload.exp + ' now=' + Math.floor(Date.now()/1000) + ' valid=' + (payload.exp > Date.now()/1000));
+
+                // Intercept navigation to /auth to log the call stack
+                var origPush = history.pushState.bind(history);
+                var origReplace = history.replaceState.bind(history);
+                history.pushState = function(st, title, url) {{
+                    if (url && String(url).includes('/auth')) {{
+                        console.warn('NAVIGATE TO /auth via pushState — stack: ' + new Error().stack.split('\\n').slice(1,4).join(' | '));
+                    }}
+                    return origPush(st, title, url);
+                }};
+                history.replaceState = function(st, title, url) {{
+                    if (url && String(url).includes('/auth')) {{
+                        console.warn('NAVIGATE TO /auth via replaceState');
+                    }}
+                    return origReplace(st, title, url);
+                }};
+            }} catch(e) {{ console.error('Init script error:', e.message); }}
         }})();
     """)
 
