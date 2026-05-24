@@ -230,10 +230,20 @@ async def setup_page(context, cookies_list, localstorage):
     await page.add_init_script(f"""
         (function() {{
             try {{
-                // Dump existing localStorage keys
-                var keys = [];
-                for (var i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
-                console.log('LS keys before inject:', JSON.stringify(keys));
+                // Intercept setItem to see if the app overwrites our token
+                var _origSet = localStorage.setItem.bind(localStorage);
+                localStorage.setItem = function(key, value) {{
+                    if (key === 'state') {{
+                        try {{
+                            var parsed = JSON.parse(value);
+                            var tok = parsed && parsed.userStore && parsed.userStore.token;
+                            console.log('APP setItem(state): token=' + (tok ? JSON.stringify(tok).substring(0,80) : 'NONE'));
+                        }} catch(e) {{
+                            console.log('APP setItem(state): raw=' + String(value).substring(0,100));
+                        }}
+                    }}
+                    return _origSet(key, value);
+                }};
 
                 // Inject our token
                 var raw = localStorage.getItem('state');
@@ -248,20 +258,22 @@ async def setup_page(context, cookies_list, localstorage):
                 var payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
                 console.log('Token injected: exp=' + payload.exp + ' now=' + Math.floor(Date.now()/1000) + ' valid=' + (payload.exp > Date.now()/1000));
 
-                // Intercept navigation to /auth to log the call stack
-                var origPush = history.pushState.bind(history);
+                // Add stack trace to replaceState
                 var origReplace = history.replaceState.bind(history);
-                history.pushState = function(st, title, url) {{
-                    if (url && String(url).includes('/auth')) {{
-                        console.warn('NAVIGATE TO /auth via pushState — stack: ' + new Error().stack.split('\\n').slice(1,4).join(' | '));
-                    }}
-                    return origPush(st, title, url);
-                }};
                 history.replaceState = function(st, title, url) {{
                     if (url && String(url).includes('/auth')) {{
-                        console.warn('NAVIGATE TO /auth via replaceState');
+                        var stack = new Error().stack.split('\\n').slice(1,6).join(' | ');
+                        console.warn('NAVIGATE TO /auth via replaceState — stack: ' + stack);
                     }}
                     return origReplace(st, title, url);
+                }};
+                var origPush = history.pushState.bind(history);
+                history.pushState = function(st, title, url) {{
+                    if (url && String(url).includes('/auth')) {{
+                        var stack = new Error().stack.split('\\n').slice(1,6).join(' | ');
+                        console.warn('NAVIGATE TO /auth via pushState — stack: ' + stack);
+                    }}
+                    return origPush(st, title, url);
                 }};
             }} catch(e) {{ console.error('Init script error:', e.message); }}
         }})();
