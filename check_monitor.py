@@ -81,6 +81,17 @@ def cookies_as_dict(cookies_list):
 # ----------------------------------------------------------------
 # Token refresh
 # ----------------------------------------------------------------
+def decode_jwt_payload(token: str) -> dict:
+    """Decode JWT payload without signature verification (for logging only)."""
+    try:
+        payload_b64 = token.split(".")[1]
+        padding = 4 - len(payload_b64) % 4
+        payload_b64 += "=" * (padding % 4)
+        import base64
+        return json.loads(base64.b64decode(payload_b64))
+    except Exception:
+        return {}
+
 def try_api_refresh(cookies_list):
     """
     Get a fresh access_token using the refresh_token cookie.
@@ -92,6 +103,15 @@ def try_api_refresh(cookies_list):
     if not refresh_token_val:
         logging.warning("No refresh_token cookie found.")
         return None, None
+
+    # Show token age so we know if it's fresh enough
+    payload = decode_jwt_payload(refresh_token_val)
+    if payload:
+        iat = payload.get("iat", 0)
+        age_hours = (datetime.now(TZ).timestamp() - iat) / 3600
+        logging.info("refresh_token age: %.1f hours (issued at %s)",
+                     age_hours,
+                     datetime.fromtimestamp(iat, TZ).strftime("%H:%M %d/%m"))
 
     headers = {
         "User-Agent":   USER_AGENT,
