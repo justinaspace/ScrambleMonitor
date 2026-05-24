@@ -81,6 +81,11 @@ def parse_auth():
 # Browser helpers
 # ----------------------------------------------------------------
 async def setup_page(context, cookies_list, localstorage):
+    """
+    Inject cookies first, then navigate directly to GROUP_B_URL,
+    inject localStorage (JWT token lives in 'state' key), and reload
+    so the React/SPA app bootstraps with the token already present.
+    """
     cookies = [
         {
             "name":   c["name"],
@@ -95,7 +100,10 @@ async def setup_page(context, cookies_list, localstorage):
         logging.info("Injected %d cookies.", len(cookies))
 
     page = await context.new_page()
-    await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+
+    # Navigate directly to the target page (not BASE_URL first)
+    # so localStorage is injected on the same origin the app will use
+    await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
 
     if localstorage:
         await page.evaluate(
@@ -104,7 +112,11 @@ async def setup_page(context, cookies_list, localstorage):
         )
         logging.info("Injected %d localStorage keys.", len(localstorage))
 
+    # Reload so the SPA re-initialises and picks up the injected JWT from localStorage
+    await page.reload(wait_until="domcontentloaded", timeout=60000)
+
     return page
+
 
 async def get_groups(page):
     group_selector      = '[class*="_group_"]'
@@ -143,6 +155,14 @@ async def get_groups(page):
             group_b_pct = (await all_pcts[0].inner_text()).strip()
 
     return group_b_pct, group_b_context, group_a_pct, group_a_context
+
+
+def is_login_url(url: str) -> bool:
+    """Detect redirect to a login/auth page by URL only — avoids false positives
+    from 'Sign In' text appearing in menus on authenticated pages."""
+    lowered = url.lower()
+    return any(token in lowered for token in ("login", "signin", "sign-in", "auth/", "/auth"))
+
 
 # ----------------------------------------------------------------
 # Main
@@ -184,7 +204,7 @@ async def check_slots():
         try:
             page = await setup_page(context, cookies_list, localstorage)
 
-            await page.goto(GROUP_B_URL, wait_until="domcontentloaded", timeout=60000)
+            # Wait for the SPA to settle after reload
             try:
                 await page.wait_for_load_state("networkidle", timeout=15000)
             except PlaywrightTimeoutError:
@@ -193,21 +213,21 @@ async def check_slots():
             await page.wait_for_timeout(2000)
             logging.info("Current URL: %s", page.url)
 
-            # Session check
-            page_text = (await page.content()).lower()
-            if "login" in page.url.lower() or (
-                "sign in" in page_text and "logout" not in page_text
-            ):
+            # ── Session check (URL-based only — avoids false positives from
+            #    'Sign In' text appearing in nav menus on authenticated pages) ──
+            if is_login_url(page.url):
+                logging.warning("Redirected to login URL: %s", page.url)
                 send_all(
                     f"🔐 Session expired ⚠️\n"
                     f"{GROUP_B_URL} ⬅️ Copy here"
                 )
                 return
 
-            # Extract percentages
+            # Extract percentages — PlaywrightTimeoutError here also means not authenticated
             try:
                 pct_text, group_b_context, group_a_pct, group_a_context = await get_groups(page)
             except PlaywrightTimeoutError:
+                logging.warning("Group selector not found — treating as session expired.")
                 send_all(
                     f"🔐 Session expired ⚠️\n"
                     f"{GROUP_B_URL} ⬅️ Copy here"
@@ -254,7 +274,12 @@ async def check_slots():
                 logging.info("Group B is 100%% full. No alert.")
 
         except Exception as e:
-            send_all(f"⚠️ Something unexpected\n🔐 Try to update the Cookies\n{GROUP_B_URL} ⬅️ Copy here")
+            logging.exception("Unexpected error: %s", e)
+            send_all(
+                f"⚠️ Something unexpected\n"
+                f"🔐 Try to update the Cookies\n"
+                f"{GROUP_B_URL} ⬅️ Copy here"
+            )
         finally:
             await browser.close()
 
