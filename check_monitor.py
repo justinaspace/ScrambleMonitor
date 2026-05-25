@@ -24,7 +24,7 @@ USER_AGENT      = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
-API_VERSION_HEADER = {"X-Api-Version": "1"}
+API_VERSION_HEADER = {"X-Api-Version": "3"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,11 +183,22 @@ async def setup_page(context, cookies_list, localstorage):
     page.on("console", lambda msg: logging.info("CONSOLE [%s]: %s", msg.type, msg.text[:300]))
     page.on("pageerror", lambda err: logging.info("PAGE ERROR: %s", str(err)[:300]))
 
-    # Intercept all /api/ requests — add X-Api-Version: 1
-    async def add_version_header(route):
+    # Intercept all /api/ requests — add X-Api-Version: 3
+    # For the refresh endpoint specifically, also inject the refresh_token into body
+    # (browser sends it via httpOnly cookie but server also needs it in body)
+    refresh_token_val = cookies_as_dict(cookies_list).get("refresh_token", "")
+
+    async def handle_api_route(route):
         headers = {**route.request.headers, **API_VERSION_HEADER}
-        await route.continue_(headers=headers)
-    await page.route("**/api/**", add_version_header)
+        if "/api/token/refresh/" in route.request.url and refresh_token_val:
+            logging.info("Intercepting refresh call — injecting refresh_token into body.")
+            await route.continue_(
+                headers=headers,
+                post_data=json.dumps({"refresh": refresh_token_val}),
+            )
+        else:
+            await route.continue_(headers=headers)
+    await page.route("**/api/**", handle_api_route)
 
     # Log ALL investor.scrambleup.com responses (not assets/locales)
     async def on_response(response):
