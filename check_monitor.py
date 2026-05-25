@@ -230,12 +230,16 @@ async def setup_page(context, cookies_list, localstorage):
     await page.add_init_script(f"""
         (function() {{
             try {{
-                // Inject our token
+                // Inject our token + ALL auth-related localStorage keys
                 var raw = localStorage.getItem('state');
                 var s = raw ? JSON.parse(raw) : {{}};
                 if (!s.userStore) s.userStore = {{}};
                 s.userStore.token = {{ access_token: {token_json} }};
                 localStorage.setItem('state', JSON.stringify(s));
+                // Inject other keys from authenticated session
+                localStorage.setItem('auth_refresh_session', '1');
+                localStorage.setItem('last_route', '/investing');
+                localStorage.setItem('i18nextLng', 'en');
                 var payload = JSON.parse(atob({token_json}.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
                 console.log('Token injected: exp=' + payload.exp + ' now=' + Math.floor(Date.now()/1000) + ' valid=' + (payload.exp > Date.now()/1000));
 
@@ -292,6 +296,13 @@ async def setup_page(context, cookies_list, localstorage):
                         .then(function(text) {{
                             var chunk = text.substring(Math.max(0,11092-400), Math.min(text.length,11092+400));
                             console.log('BUNDLE@11092: ' + chunk.substring(0,600));
+                            // Search for auth_refresh_session reference
+                            var authIdx = text.indexOf('auth_refresh_session');
+                            if (authIdx >= 0) console.log('auth_refresh_session found at ' + authIdx + ': ' + text.substring(Math.max(0,authIdx-100),authIdx+200));
+                            else console.log('auth_refresh_session NOT found in bundle');
+                            // Search for isAuthenticated
+                            var iaIdx = text.indexOf('isAuthenticated');
+                            if (iaIdx >= 0) console.log('isAuthenticated at ' + iaIdx + ': ' + text.substring(Math.max(0,iaIdx-50),iaIdx+150));
                         }})
                         .catch(function(e) {{ console.log('Bundle err: '+e); }});
                 }}, 1000);
