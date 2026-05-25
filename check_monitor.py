@@ -123,7 +123,7 @@ def create_temp_access_token(cookies_list):
 
     payload = {
         "token_type": "access",
-        "exp": now + 28800,   # 8 hours — same as real tokens
+        "exp": now - 60,      # Already expired — forces React to call refresh immediately
         "iat": now,
         "jti": f"temp_{hex(now)[2:]}",
         "user_id": user_id,
