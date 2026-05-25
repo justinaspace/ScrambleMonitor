@@ -147,15 +147,15 @@ async def get_percentage(context, cookies_list):
     real_token = {"value": None}
     refresh_done = asyncio.Event()
 
-    # Route interceptor — fires BEFORE request hits server
+    # Route interceptor — only ensures x-api-version header is set.
+    # The browser sends refresh_token via httpOnly cookie automatically.
+    # Do NOT modify the body — fingerprint is computed over the original body.
     async def intercept_refresh(route):
-        logging.info("### REFRESH INTERCEPTED — injecting body ###")
+        logging.info("### REFRESH INTERCEPTED ###")
         headers = dict(route.request.headers)
         headers["x-api-version"] = "3"
-        headers["content-type"] = "application/json"
-        body = json.dumps({"refresh": refresh_token_val})
-        logging.info("Body being sent: %s", body[:80])
-        await route.continue_(headers=headers, post_data=body)
+        logging.info("x-fingerprint present: %s", "x-fingerprint" in headers)
+        await route.continue_(headers=headers)
 
     await page.route("**/token/refresh/**", intercept_refresh)
     logging.info("Route interceptor registered for **/token/refresh/**")
