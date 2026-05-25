@@ -54,31 +54,48 @@ def parse_auth():
 def cookies_as_dict(cookies_list):
     return {c["name"]: c["value"] for c in cookies_list if c.get("name") and c.get("value")}
 
-def extract_access_token(localstorage: dict) -> str | None:
-    """Extract access_token from localStorage.state.userStore.token"""
-    raw = localstorage.get("state")
-    if not raw:
-        return None
+def check_token(token: str) -> str | None:
+    """Validate token expiry and log age. Returns token if valid, None if expired."""
     try:
-        state = json.loads(raw) if isinstance(raw, str) else raw
-        token = state.get("userStore", {}).get("token", {}).get("access_token")
-        if token:
-            # Check it's not expired
-            payload_b64 = token.split(".")[1]
-            padding = 4 - len(payload_b64) % 4
-            payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (padding % 4)))
-            exp = payload.get("exp", 0)
-            now = int(datetime.now(TZ).timestamp())
-            age_h = (now - payload.get("iat", now)) / 3600
-            remaining_h = (exp - now) / 3600
-            logging.info("access_token age=%.1fh, expires in %.1fh", age_h, remaining_h)
-            if exp > now:
-                return token
-            logging.warning("access_token is expired.")
+        payload_b64 = token.split(".")[1]
+        padding = 4 - len(payload_b64) % 4
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (padding % 4)))
+        exp = payload.get("exp", 0)
+        now = int(datetime.now(TZ).timestamp())
+        age_h = (now - payload.get("iat", now)) / 3600
+        remaining_h = (exp - now) / 3600
+        logging.info("access_token age=%.1fh, expires in %.1fh", age_h, remaining_h)
+        if exp > now:
+            return token
+        logging.warning("access_token is expired.")
         return None
     except Exception as e:
-        logging.warning("Could not parse access_token: %s", e)
+        logging.warning("Could not validate token: %s", e)
         return None
+
+def extract_access_token(auth: dict) -> str | None:
+    """Extract access_token — tries top-level key (new bookmarklet), then localStorage.state"""
+    # New bookmarklet exports token at top level as "access_token"
+    direct = auth.get("access_token")
+    if direct:
+        logging.info("Found access_token at top level.")
+        return check_token(direct)
+    # Old location: localStorage.state.userStore.token.access_token
+    localstorage = auth if not auth.get("cookies") else {}
+    raw = localstorage.get("state")
+    if not raw and isinstance(auth, dict):
+        ls = auth.get("localStorage", {})
+        raw = ls.get("state") if ls else None
+    if raw:
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else raw
+            token = state.get("userStore", {}).get("token", {}).get("access_token")
+            if token:
+                logging.info("Found access_token in localStorage.state")
+                return check_token(token)
+        except Exception as e:
+            logging.warning("Could not parse state: %s", e)
+    return None
 
 SAME_SITE_MAP = {"strict": "Strict", "lax": "Lax", "no_restriction": "None", "none": "None"}
 
@@ -187,8 +204,9 @@ async def check_slots():
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH.\nError: {e}")
         return
 
-    # Get access_token from localStorage export
-    access_token = extract_access_token(localstorage)
+    # Get access_token — new bookmarklet puts it at top level
+    raw_auth = json.loads(AUTH_JSON)
+    access_token = extract_access_token(raw_auth if isinstance(raw_auth, dict) else {})
     if not access_token:
         logging.warning("No valid access_token in localStorage.")
         send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Copy here")
