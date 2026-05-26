@@ -1,8 +1,5 @@
-name: ScrambleUp Check
+name: ScrambleUp Manual Check
 on:
-  schedule:
-    - cron: '0/10 5-20 1-16 * *'
-    - cron: '0 18 28-31 * *'
   workflow_dispatch:
 jobs:
   check:
@@ -14,9 +11,8 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests
-      - name: Run check
+      - name: Run manual check
         env:
           SCRAMBLE_AUTH: ${{ secrets.SCRAMBLE_AUTH }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: python check_monitor.py
