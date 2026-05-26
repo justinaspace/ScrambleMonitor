@@ -66,6 +66,7 @@ def fetch_groups(access_token: str) -> list | None:
 def parse_groups(data: list) -> tuple:
     logging.info("API data: %s", json.dumps(data)[:500])
     group_a_pct = group_a_ctx = group_b_pct = group_b_ctx = None
+    group_b_remaining = None
     for item in data:
         if not isinstance(item, dict):
             continue
@@ -73,16 +74,20 @@ def parse_groups(data: list) -> tuple:
         title = item.get("group_title", group)
         full = float(item.get("full_amount") or 0)
         remaining = float(item.get("remaining_amount") or 0)
-        total = full + remaining
-        pct_val = round(full / total * 100) if total > 0 else 0
+        if group == "moderate":
+            group_b_remaining = remaining
+        # (full - remaining) / full * 100 = filled percentage
+        pct_val = round((full - remaining) / full * 100) if full > 0 else 0
         pct_str = f"{pct_val}%"
         if group == "moderate":
             group_b_pct, group_b_ctx = pct_str, str(title)
-            logging.info("Group B: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
+            logging.info("Group B: full=%.2f remaining=%.2f filled=%.2f pct=%s",
+                         full, remaining, full - remaining, pct_str)
         elif group == "conservative":
             group_a_pct, group_a_ctx = pct_str, str(title)
-            logging.info("Group A: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
-    return group_b_pct, group_b_ctx, group_a_pct, group_a_ctx
+            logging.info("Group A: full=%.2f remaining=%.2f filled=%.2f pct=%s",
+                         full, remaining, full - remaining, pct_str)
+    return group_b_pct, group_b_ctx, group_a_pct, group_a_ctx, group_b_remaining
 
 def check_slots():
     now = datetime.now(TZ)
@@ -104,7 +109,7 @@ def check_slots():
         send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
         return
 
-    group_b_pct, group_b_ctx, group_a_pct, group_a_ctx = parse_groups(data)
+    group_b_pct, group_b_ctx, group_a_pct, group_a_ctx, group_b_remaining = parse_groups(data)
 
     if group_b_pct is None:
         send_all("⚠️ Could not parse group data. Check logs.")
@@ -129,9 +134,11 @@ def check_slots():
             f"{GROUP_B_URL}"
         )
     elif 0 < pct_value < 100:
+        remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently **{pct_value}%** filled ⚡\n"
+            f"💰 Remaining in Group B: **{remaining_str}**\n"
             f"💸 {ctx_b_line}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 {ctx_a_line}\n"
