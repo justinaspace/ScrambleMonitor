@@ -77,32 +77,38 @@ def fetch_rounds(access_token: str) -> dict | None:
         return None
 
 def parse_groups(data) -> tuple:
-    """Parse API response to extract Group A and Group B percentages."""
+    """Parse API response from /api/investors/invested_in_groups_stats/
+    Fields: group (conservative=A, moderate=B), group_title, full_amount, remaining_amount
+    percentage = full_amount / (full_amount + remaining_amount) * 100
+    When round not open: full_amount=0, remaining_amount=0 → return 0%
+    """
     logging.info("API data: %s", json.dumps(data)[:500])
     group_a_pct = group_a_ctx = group_b_pct = group_b_ctx = None
 
-    # data could be a list of rounds or a dict with rounds inside
-    rounds = data if isinstance(data, list) else data.get("results", data.get("rounds", [data]))
+    rounds = data if isinstance(data, list) else [data]
 
     for item in rounds:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name", "") or item.get("title", "") or item.get("group", "")).lower()
-        # Try various percentage field names
-        pct = (item.get("filled_percentage") or item.get("percentage") or
-               item.get("fill_percentage") or item.get("progress") or
-               item.get("funded_percentage") or item.get("percent"))
-        if pct is not None:
-            pct_str = f"{float(pct):.0f}%"
-            ctx = item.get("name") or item.get("title") or name
-            if "b" in name or "group b" in name or name == "b":
-                group_b_pct, group_b_ctx = pct_str, str(ctx)
-            elif "a" in name or "group a" in name or name == "a":
-                group_a_pct, group_a_ctx = pct_str, str(ctx)
+        group = str(item.get("group", "")).lower()
+        title = item.get("group_title", group)
+        full = float(item.get("full_amount") or 0)
+        remaining = float(item.get("remaining_amount") or 0)
+        total = full + remaining
 
-    # If we couldn't identify by name, log all fields to help debugging
-    if group_b_pct is None:
-        logging.info("Could not identify groups by name. Raw rounds: %s", json.dumps(rounds)[:600])
+        if total > 0:
+            pct_val = round(full / total * 100)
+        else:
+            pct_val = 0
+
+        pct_str = f"{pct_val}%"
+
+        if group == "moderate":  # Group B
+            group_b_pct, group_b_ctx = pct_str, str(title)
+            logging.info("Group B: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
+        elif group == "conservative":  # Group A
+            group_a_pct, group_a_ctx = pct_str, str(title)
+            logging.info("Group A: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
 
     return group_b_pct, group_b_ctx, group_a_pct, group_a_ctx
 
