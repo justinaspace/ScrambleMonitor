@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
-MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 API_URL         = "https://investor.scrambleup.com/api/investors/invested_in_groups_stats/"
 TZ              = ZoneInfo("Europe/Vilnius")
@@ -24,17 +23,6 @@ def send_all(message: str) -> None:
         requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
     except Exception as e:
         logging.error("Discord error: %s", e)
-
-def is_last_day_of_month(now):
-    return now.day == calendar.monthrange(now.year, now.month)[1]
-
-def should_run_now(now):
-    h, m, d = now.hour, now.minute, now.day
-    if h >= 22 or h < 7:
-        return False
-    if is_last_day_of_month(now):
-        return h == 18 and m == 0
-    return 1 <= d <= 16
 
 def get_access_token(auth: dict) -> str | None:
     token = auth.get("access_token")
@@ -57,12 +45,11 @@ def get_access_token(auth: dict) -> str | None:
         logging.warning("Could not validate token: %s", e)
         return None
 
-def fetch_rounds(access_token: str) -> dict | None:
+def fetch_groups(access_token: str) -> list | None:
     headers = {
         "Authorization": f"Token {access_token}",
         "X-Api-Version": "3",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": "https://investor.scrambleup.com/investing",
     }
     try:
@@ -76,18 +63,10 @@ def fetch_rounds(access_token: str) -> dict | None:
         logging.error("API call failed: %s", e)
         return None
 
-def parse_groups(data) -> tuple:
-    """Parse API response from /api/investors/invested_in_groups_stats/
-    Fields: group (conservative=A, moderate=B), group_title, full_amount, remaining_amount
-    percentage = full_amount / (full_amount + remaining_amount) * 100
-    When round not open: full_amount=0, remaining_amount=0 → return 0%
-    """
+def parse_groups(data: list) -> tuple:
     logging.info("API data: %s", json.dumps(data)[:500])
     group_a_pct = group_a_ctx = group_b_pct = group_b_ctx = None
-
-    rounds = data if isinstance(data, list) else [data]
-
-    for item in rounds:
+    for item in data:
         if not isinstance(item, dict):
             continue
         group = str(item.get("group", "")).lower()
@@ -95,80 +74,61 @@ def parse_groups(data) -> tuple:
         full = float(item.get("full_amount") or 0)
         remaining = float(item.get("remaining_amount") or 0)
         total = full + remaining
-
-        if total > 0:
-            pct_val = round(full / total * 100)
-        else:
-            pct_val = 0
-
+        pct_val = round(full / total * 100) if total > 0 else 0
         pct_str = f"{pct_val}%"
-
-        if group == "moderate":  # Group B
+        if group == "moderate":
             group_b_pct, group_b_ctx = pct_str, str(title)
             logging.info("Group B: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
-        elif group == "conservative":  # Group A
+        elif group == "conservative":
             group_a_pct, group_a_ctx = pct_str, str(title)
             logging.info("Group A: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
-
     return group_b_pct, group_b_ctx, group_a_pct, group_a_ctx
 
 def check_slots():
     now = datetime.now(TZ)
-
-    if not MANUAL_RUN and is_last_day_of_month(now) and now.hour == 12:
-        send_all("⚠️ Scramble Group B Bot.\nRESERVE the Group B funds/slots")
-
-    if not MANUAL_RUN and not should_run_now(now):
-        return
-
-    if MANUAL_RUN:
-        logging.info("Manual run triggered.")
-    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
+    logging.info("Manual check at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
 
     try:
-        auth = json.loads(AUTH_JSON) if isinstance(AUTH_JSON, str) else AUTH_JSON
+        auth = json.loads(AUTH_JSON)
     except Exception as e:
         send_all(f"⚠️ Could not parse SCRAMBLE_AUTH: {e}")
         return
 
     access_token = get_access_token(auth if isinstance(auth, dict) else {})
     if not access_token:
-        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Copy here")
+        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
         return
 
-    data = fetch_rounds(access_token)
+    data = fetch_groups(access_token)
     if data is None:
-        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Copy here")
+        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
         return
 
     group_b_pct, group_b_ctx, group_a_pct, group_a_ctx = parse_groups(data)
 
     if group_b_pct is None:
-        send_all(f"⚠️ Could not parse group data. Check logs.")
+        send_all("⚠️ Could not parse group data. Check logs.")
         return
 
     try:
-        pct_value = int(float(group_b_pct.replace("%", "").strip()))
+        pct_value = int(group_b_pct.replace("%", "").strip())
     except ValueError:
         send_all(f"⚠️ Unexpected format: '{group_b_pct}'")
         return
 
-    pct_a_str = "N/A"
-    ctx_a_line = ""
-    if group_a_pct:
-        try:
-            pct_a_str = f"{int(float(group_a_pct.replace('%','').strip()))}%"
-        except ValueError:
-            pct_a_str = group_a_pct
-    if group_a_ctx:
-        ctx_a_line = str(group_a_ctx).splitlines()[0].strip()
+    pct_a_str = group_a_pct or "N/A"
+    ctx_a_line = str(group_a_ctx).splitlines()[0].strip() if group_a_ctx else ""
+    ctx_b_line = str(group_b_ctx).splitlines()[0].strip() if group_b_ctx else "Group B"
 
-    logging.info("Group B: %s, Group A: %s", group_b_pct, group_a_pct)
-
+    # Always send status — this is a manual check tool
     if pct_value == 0:
-        logging.info("Group B 0%% — not open yet.")
+        send_all(
+            f"💤 Round not open yet\n"
+            f"📊 Group B - 0% filled\n"
+            f"📊 Group A - {pct_a_str} filled\n"
+            f"{GROUP_B_URL}"
+        )
     elif 0 < pct_value < 100:
-        ctx_b_line = str(group_b_ctx).splitlines()[0].strip() if group_b_ctx else "Group B"
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently **{pct_value}%** filled ⚡\n"
@@ -177,9 +137,12 @@ def check_slots():
             f"💵 {ctx_a_line}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
-        logging.info("ALERT SENT — %d%% full.", pct_value)
     else:
-        logging.info("Group B 100%% full.")
+        send_all(
+            f"🔴 Group B fully filled (100%)\n"
+            f"📊 Group A - {pct_a_str} filled\n"
+            f"{GROUP_B_URL}"
+        )
 
 if __name__ == "__main__":
     check_slots()
