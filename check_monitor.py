@@ -11,7 +11,7 @@ AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 MANUAL_RUN      = os.environ.get("MANUAL_RUN", "false").lower() == "true"
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
-API_URL         = "https://investor.scrambleup.com/api/investors/dashboard/rounds/active/"
+API_URL         = "https://investor.scrambleup.com/api/investors/invested_in_groups_stats/"
 TZ              = ZoneInfo("Europe/Vilnius")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
