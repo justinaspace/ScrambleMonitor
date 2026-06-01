@@ -38,7 +38,7 @@ def should_run_now(now: datetime) -> bool:
             return True
         logging.info("Last day of month — slot not allowed at %s.", now.strftime("%H:%M"))
         return False
-    if 1 <= d <= 10:
+    if 5 <= d <= 10:
         return True
     logging.info("Day %s — not in active schedule, skipping.", d)
     return False
@@ -83,92 +83,4 @@ def fetch_groups(access_token: str) -> list | None:
         return None
 
 def parse_groups(data: list) -> tuple:
-    logging.info("API data: %s", json.dumps(data)[:500])
-    group_a_pct = group_a_ctx = group_b_pct = group_b_ctx = None
-    group_b_remaining = group_b_full = group_a_full = None
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        group = str(item.get("group", "")).lower()
-        title = item.get("group_title", group)
-        full = float(item.get("full_amount") or 0)
-        remaining = float(item.get("remaining_amount") or 0)
-        pct_val = round((full - remaining) / full * 100) if full > 0 else 0
-        pct_str = f"{pct_val}%"
-        if group == "moderate":
-            group_b_pct, group_b_ctx = pct_str, str(title)
-            group_b_remaining = remaining
-            group_b_full = full
-            logging.info("Group B: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
-        elif group == "conservative":
-            group_a_pct, group_a_ctx = pct_str, str(title)
-            group_a_full = full
-            logging.info("Group A: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
-    return group_b_pct, group_b_ctx, group_a_pct, group_a_ctx, group_b_remaining, group_b_full, group_a_full
-
-def check_slots():
-    now = datetime.now(TZ)
-
-    # Reserve alert: last day of month at 12:xx
-    if is_last_day_of_month(now) and now.hour == 12:
-        logging.info("Last day of month, 12:%02d Vilnius — sending reserve alert.", now.minute)
-        send_all("⚠️ Scramble Group B Bot.\nRESERVE the Group B funds/slots")
-
-    if not should_run_now(now):
-        return
-
-    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
-
-    try:
-        auth = json.loads(AUTH_JSON)
-    except Exception as e:
-        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH: {e}")
-        return
-
-    access_token = get_access_token(auth if isinstance(auth, dict) else {})
-    if not access_token:
-        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
-        return
-
-    data = fetch_groups(access_token)
-    if data is None:
-        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
-        return
-
-    group_b_pct, group_b_ctx, group_a_pct, group_a_ctx, group_b_remaining, group_b_full, group_a_full = parse_groups(data)
-
-    if group_b_pct is None:
-        send_all("⚠️ Could not parse group data. Check logs.")
-        return
-
-    try:
-        pct_value = int(group_b_pct.replace("%", "").strip())
-    except ValueError:
-        send_all(f"⚠️ Unexpected format: '{group_b_pct}'")
-        return
-
-    pct_a_str = group_a_pct or "N/A"
-    ctx_a_line = str(group_a_ctx).splitlines()[0].strip() if group_a_ctx else ""
-    ctx_b_line = str(group_b_ctx).splitlines()[0].strip() if group_b_ctx else "Group B"
-
-    logging.info("Group B: %s, Group A: %s", group_b_pct, group_a_pct)
-
-    if pct_value == 0:
-        logging.info("Group B 0%% — not open yet. No alert.")
-    elif 0 < pct_value < 100:
-        remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
-        send_all(
-            f"🙂 OPEN investment in Group B!\n"
-            f"📈 Currently **{pct_value}%** filled ⚡\n"
-            f"💰 Remaining in Group B: **{remaining_str}**\n"
-            f"💸 {ctx_b_line}\n"
-            f"📊 Group A - {pct_a_str} filled\n"
-            f"💵 {ctx_a_line}\n"
-            f"{GROUP_B_URL} ⬅️ Invest now\n"
-        )
-        logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
-    else:
-        logging.info("Group B 100%% full. No alert.")
-
-if __name__ == "__main__":
-    check_slots()
+    logging.info("AP
