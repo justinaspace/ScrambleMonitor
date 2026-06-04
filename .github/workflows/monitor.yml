@@ -2,10 +2,6 @@ name: ScrambleUp Group B Monitor
 on:
   schedule:
     - cron: '5-55/10 5-19 5-10 * *'
-    - cron: '0 9 28-31 * *'
-    - cron: '0 10 28-31 * *'
-    - cron: '0 15 28-31 * *'
-    - cron: '0 16 28-31 * *'
   workflow_dispatch:
 jobs:
   monitor:
