@@ -125,8 +125,6 @@ def check_slots():
         return
 
     pct_a_str = group_a_pct or "N/A"
-    ctx_a_line = str(group_a_ctx).splitlines()[0].strip() if group_a_ctx else ""
-    ctx_b_line = str(group_b_ctx).splitlines()[0].strip() if group_b_ctx else "Group B"
     remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
     b_target = f"€{group_b_full:,.0f}" if group_b_full else "N/A"
     a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
@@ -142,18 +140,17 @@ def check_slots():
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently **{pct_value}%** filled ⚡\n"
-            f"💰 Remaining in Group B: **{remaining_str}**\n"
-            f"💸 {ctx_b_line}\n"
+            f"💸 {remaining_str} left from {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
-            f"💵 {ctx_a_line}\n"
+            f"💵 Group A target: **{a_target}**\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
     else:
         send_all(
             f"🔴 Group B fully filled (100%)\n"
-            f"💸 Group B full value: **{b_target}**\n"
+            f"💸 Group B target: **{b_target}**\n"
             f"📊 Group A - {pct_a_str} filled\n"
-            f"💵 Group A full value: **{a_target}**\n"
+            f"💵 Group A target: **{a_target}**\n"
             f"{GROUP_B_URL}\n"
         )
 
