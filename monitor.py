@@ -2,7 +2,6 @@ import os
 import json
 import base64
 import logging
-import calendar
 import random
 import time
 import requests
@@ -27,18 +26,10 @@ def send_all(message: str) -> None:
     except Exception as e:
         logging.error("Failed to send Discord: %s", e)
 
-def is_last_day_of_month(now: datetime) -> bool:
-    return now.day == calendar.monthrange(now.year, now.month)[1]
-
 def should_run_now(now: datetime) -> bool:
     h, m, d = now.hour, now.minute, now.day
     if h >= 22 or h < 7:
         logging.info("Night skip: %s Vilnius.", now.strftime("%H:%M"))
-        return False
-    if is_last_day_of_month(now):
-        if h == 18 and m == 0:
-            return True
-        logging.info("Last day of month — slot not allowed at %s.", now.strftime("%H:%M"))
         return False
     if 5 <= d <= 10:
         return True
@@ -110,14 +101,11 @@ def parse_groups(data: list) -> tuple:
 
 def check_slots():
     now = datetime.now(TZ)
-    if is_last_day_of_month(now) and now.hour == 12:
-        logging.info("Last day of month, 12:%02d Vilnius — sending reserve alert.", now.minute)
-        send_all("⚠️ Scramble Group B Bot.\nRESERVE the Group B funds/slots")
     if not should_run_now(now):
         return
     delay = random.randint(0, 60)
-    logging.info("Jitter delay: %ds — API call at %s Vilnius.",
-                 delay, (datetime.now(TZ)).strftime("%H:%M:%S"))
+    logging.info("Jitter delay: %ds — scheduled at %s Vilnius.",
+                 delay, now.strftime("%H:%M:%S"))
     time.sleep(delay)
     now = datetime.now(TZ)
     logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M:%S"), now.day)
