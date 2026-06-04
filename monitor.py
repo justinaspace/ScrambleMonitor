@@ -3,6 +3,8 @@ import json
 import base64
 import logging
 import calendar
+import random
+import time
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -113,7 +115,12 @@ def check_slots():
         send_all("⚠️ Scramble Group B Bot.\nRESERVE the Group B funds/slots")
     if not should_run_now(now):
         return
-    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
+    delay = random.randint(0, 60)
+    logging.info("Jitter delay: %ds — API call at %s Vilnius.",
+                 delay, (datetime.now(TZ)).strftime("%H:%M:%S"))
+    time.sleep(delay)
+    now = datetime.now(TZ)
+    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M:%S"), now.day)
     try:
         auth = json.loads(AUTH_JSON)
     except Exception as e:
