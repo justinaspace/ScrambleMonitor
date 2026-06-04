@@ -154,7 +154,7 @@ def check_slots():
             f"💸 Group B full value: **{b_target}**\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A full value: **{a_target}**\n"
-            f"{GROUP_B_URL}"
+            f"{GROUP_B_URL}\n"
         )
 
 if __name__ == "__main__":
