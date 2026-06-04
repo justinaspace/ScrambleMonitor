@@ -78,7 +78,6 @@ def parse_groups(data: list) -> tuple:
         remaining = float(item.get("remaining_amount") or 0)
         if group == "moderate":
             group_b_remaining = remaining
-        # (full - remaining) / full * 100 = filled percentage
         pct_val = round((full - remaining) / full * 100) if full > 0 else 0
         pct_str = f"{pct_val}%"
         if group == "moderate":
@@ -128,11 +127,11 @@ def check_slots():
     pct_a_str = group_a_pct or "N/A"
     ctx_a_line = str(group_a_ctx).splitlines()[0].strip() if group_a_ctx else ""
     ctx_b_line = str(group_b_ctx).splitlines()[0].strip() if group_b_ctx else "Group B"
+    remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
+    b_target = f"€{group_b_full:,.0f}" if group_b_full else "N/A"
+    a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
 
-    # Always send status — this is a manual check tool
     if pct_value == 0:
-        b_target = f"€{group_b_full:,.0f}" if group_b_full else "N/A"
-        a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
         send_all(
             f"💤 Round not open yet\n"
             f"💸 Group B target: {b_target}\n"
@@ -140,7 +139,6 @@ def check_slots():
             f"{GROUP_B_URL}"
         )
     elif 0 < pct_value < 100:
-        remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently **{pct_value}%** filled ⚡\n"
