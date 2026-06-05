@@ -32,7 +32,7 @@ def should_run_now(now: datetime) -> bool:
     if h >= 22 or h < 7:
         logging.info("Night skip: %s Vilnius.", now.strftime("%H:%M"))
         return False
-    if 5 <= d <= 10:
+    if 5 <= d <= 15:
         return True
     logging.info("Day %s — not in active schedule, skipping.", d)
     return False
@@ -76,7 +76,7 @@ def fetch_groups(access_token: str) -> list | None:
         logging.error("API call failed: %s", e)
         return None
 
-def fetch_balance(access_token: str) -> str:
+def fetch_balance(access_token: str) -> float | None:
     headers = {
         "Authorization": f"Token {access_token}",
         "X-Api-Version": "3",
@@ -91,12 +91,12 @@ def fetch_balance(access_token: str) -> str:
             available = float(data.get("available", 0))
             available = int(available * 100) / 100
             logging.info("Available cash: %.2f", available)
-            return f"€{available:,.2f}"
+            return available
         logging.warning("Balance API returned %d: %s", r.status_code, r.text[:200])
-        return "N/A"
+        return None
     except Exception as e:
         logging.error("Balance API call failed: %s", e)
-        return "N/A"
+        return None
 
 def parse_groups(data: list) -> tuple:
     logging.info("API data: %s", json.dumps(data)[:500])
@@ -162,7 +162,11 @@ def check_slots():
     if pct_value == 0:
         logging.info("Group B 0%% — not open yet. No alert.")
     elif 0 < pct_value < 100:
-        cash_str = fetch_balance(access_token)
+        available = fetch_balance(access_token)
+        if available is not None and available < 1.00:
+            logging.info("Available cash €%.2f is below €1.00 — skipping alert.", available)
+            return
+        cash_str = f"€{available:,.2f}" if available is not None else "N/A"
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently {pct_value}% filled ⚡\n"
