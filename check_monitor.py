@@ -2,7 +2,6 @@ import os
 import json
 import base64
 import logging
-import calendar
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -11,6 +10,7 @@ AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 API_URL         = "https://investor.scrambleup.com/api/investors/invested_in_groups_stats/"
+BALANCE_URL     = "https://investor.scrambleup.com/api/investors/dashboard/balance/"
 TZ              = ZoneInfo("Europe/Vilnius")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -62,6 +62,27 @@ def fetch_groups(access_token: str) -> list | None:
     except Exception as e:
         logging.error("API call failed: %s", e)
         return None
+
+def fetch_balance(access_token: str) -> str:
+    headers = {
+        "Authorization": f"Token {access_token}",
+        "X-Api-Version": "3",
+        "Accept": "application/json",
+        "Referer": "https://investor.scrambleup.com/investing",
+    }
+    try:
+        r = requests.get(BALANCE_URL, headers=headers, timeout=15)
+        logging.info("Balance API response: %d", r.status_code)
+        if r.status_code == 200:
+            data = r.json()
+            available = float(data.get("available", 0))
+            logging.info("Available cash: %.2f", available)
+            return f"€{available:,.2f}"
+        logging.warning("Balance API returned %d: %s", r.status_code, r.text[:200])
+        return "N/A"
+    except Exception as e:
+        logging.error("Balance API call failed: %s", e)
+        return "N/A"
 
 def parse_groups(data: list) -> tuple:
     logging.info("API data: %s", json.dumps(data)[:500])
@@ -124,6 +145,8 @@ def check_slots():
         send_all(f"⚠️ Unexpected format: '{group_b_pct}'")
         return
 
+    cash_str = fetch_balance(access_token)
+
     pct_a_str = group_a_pct or "N/A"
     remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
     b_target = f"€{group_b_full:,.0f}" if group_b_full else "N/A"
@@ -134,6 +157,7 @@ def check_slots():
             f"💤 Round not open yet\n"
             f"💸 Group B target: {b_target}\n"
             f"💵 Group A target: {a_target}\n"
+            f"💰 Your cash: {cash_str}\n"
             f"{GROUP_B_URL}"
         )
     elif 0 < pct_value < 100:
@@ -143,6 +167,7 @@ def check_slots():
             f"💸 {remaining_str} left from {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: **{a_target}**\n"
+            f"💰 Your cash: {cash_str}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
     else:
@@ -151,6 +176,7 @@ def check_slots():
             f"💸 Group B target: **{b_target}**\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: **{a_target}**\n"
+            f"💰 Your cash: {cash_str}\n"
             f"{GROUP_B_URL}\n"
         )
 
