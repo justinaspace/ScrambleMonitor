@@ -32,7 +32,7 @@ def should_run_now(now: datetime) -> bool:
     if h >= 22 or h < 7:
         logging.info("Night skip: %s Vilnius.", now.strftime("%H:%M"))
         return False
-    if 5 <= d <= 15:
+    if 5 <= d <= 10:
         return True
     logging.info("Day %s — not in active schedule, skipping.", d)
     return False
