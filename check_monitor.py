@@ -159,7 +159,7 @@ def check_slots():
             f"💤 Round not open yet\n"
             f"💸 Group B target: {b_target}\n"
             f"💵 Group A target: {a_target}\n"
-            f"💰 Your cash: {cash_str}\n"
+            f"💰 Available cash: {cash_str}\n"
             f"{GROUP_B_URL}"
         )
     elif 0 < pct_value < 100:
@@ -169,7 +169,7 @@ def check_slots():
             f"💸 {remaining_str} left from {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: {a_target}\n"
-            f"💰 Your cash: {cash_str}\n"
+            f"💰 Available cash: {cash_str}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
     else:
@@ -178,7 +178,7 @@ def check_slots():
             f"💸 Group B target: {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: {a_target}\n"
-            f"💰 Your cash: {cash_str}\n"
+            f"💰 Available cash: {cash_str}\n"
             f"{GROUP_B_URL}\n"
         )
 
