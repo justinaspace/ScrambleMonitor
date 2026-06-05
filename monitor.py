@@ -12,6 +12,7 @@ AUTH_JSON       = os.environ.get("SCRAMBLE_AUTH", "{}")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 API_URL         = "https://investor.scrambleup.com/api/investors/invested_in_groups_stats/"
+BALANCE_URL     = "https://investor.scrambleup.com/api/investors/dashboard/balance/"
 TZ              = ZoneInfo("Europe/Vilnius")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -27,7 +28,7 @@ def send_all(message: str) -> None:
         logging.error("Failed to send Discord: %s", e)
 
 def should_run_now(now: datetime) -> bool:
-    h, m, d = now.hour, now.minute, now.day
+    h, d = now.hour, now.day
     if h >= 22 or h < 7:
         logging.info("Night skip: %s Vilnius.", now.strftime("%H:%M"))
         return False
@@ -74,6 +75,27 @@ def fetch_groups(access_token: str) -> list | None:
     except Exception as e:
         logging.error("API call failed: %s", e)
         return None
+
+def fetch_balance(access_token: str) -> str:
+    headers = {
+        "Authorization": f"Token {access_token}",
+        "X-Api-Version": "3",
+        "Accept": "application/json",
+        "Referer": "https://investor.scrambleup.com/investing",
+    }
+    try:
+        r = requests.get(BALANCE_URL, headers=headers, timeout=15)
+        logging.info("Balance API response: %d", r.status_code)
+        if r.status_code == 200:
+            data = r.json()
+            available = float(data.get("available", 0))
+            logging.info("Available cash: %.2f", available)
+            return f"€{available:,.2f}"
+        logging.warning("Balance API returned %d: %s", r.status_code, r.text[:200])
+        return "N/A"
+    except Exception as e:
+        logging.error("Balance API call failed: %s", e)
+        return "N/A"
 
 def parse_groups(data: list) -> tuple:
     logging.info("API data: %s", json.dumps(data)[:500])
@@ -139,12 +161,14 @@ def check_slots():
     if pct_value == 0:
         logging.info("Group B 0%% — not open yet. No alert.")
     elif 0 < pct_value < 100:
+        cash_str = fetch_balance(access_token)
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently **{pct_value}%** filled ⚡\n"
             f"💸 {remaining_str} left from {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: **{a_target}**\n"
+            f"💰 Your cash: {cash_str}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
         logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
