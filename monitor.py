@@ -89,6 +89,7 @@ def fetch_balance(access_token: str) -> str:
         if r.status_code == 200:
             data = r.json()
             available = float(data.get("available", 0))
+            available = int(available * 100) / 100
             logging.info("Available cash: %.2f", available)
             return f"€{available:,.2f}"
         logging.warning("Balance API returned %d: %s", r.status_code, r.text[:200])
