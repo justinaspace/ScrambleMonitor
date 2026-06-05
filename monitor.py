@@ -165,10 +165,10 @@ def check_slots():
         cash_str = fetch_balance(access_token)
         send_all(
             f"🙂 OPEN investment in Group B!\n"
-            f"📈 Currently **{pct_value}%** filled ⚡\n"
+            f"📈 Currently {pct_value}% filled ⚡\n"
             f"💸 {remaining_str} left from {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
-            f"💵 Group A target: **{a_target}**\n"
+            f"💵 Group A target: {a_target}\n"
             f"💰 Your cash: {cash_str}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
