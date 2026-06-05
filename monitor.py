@@ -173,7 +173,7 @@ def check_slots():
             f"💸 {remaining_str} left from {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: {a_target}\n"
-            f"💰 Your cash: {cash_str}\n"
+            f"💰 Available cash: {cash_str}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
         logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
