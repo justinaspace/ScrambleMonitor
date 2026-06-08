@@ -1,8 +1,8 @@
 name: Reserve Alert
 on:
   schedule:
-    - cron: '50 7 28-31 * *'
-    - cron: '50 8 28-31 * *'
+    - cron: '45 7 28-31 * *'
+    - cron: '45 8 28-31 * *'
   workflow_dispatch:
 jobs:
   reserve:
