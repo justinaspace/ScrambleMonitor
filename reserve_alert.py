@@ -29,8 +29,8 @@ def run():
     if not is_last_day_of_month(now):
         logging.info("Day %s — not last day of month, skipping.", now.day)
         return
-    if not (now.hour == 10 and now.minute == 50):
-        logging.info("Time %s — not 10:50 Tallinn, skipping.", now.strftime("%H:%M"))
+    if not (now.hour == 10 and now.minute == 45):
+        logging.info("Time %s — not 10:45 Tallinn, skipping.", now.strftime("%H:%M"))
         return
     send_all("💸 Reserve funds for Group B")
     logging.info("Reserve alert sent.")
