@@ -174,7 +174,7 @@ def check_slots():
         )
     else:
         send_all(
-            f"🔴 Group B - 100% fully filled\n"
+            f"🔴 Group B - 100% filled\n"
             f"💸 Group B target: {b_target}\n"
             f"📊 Group A - {pct_a_str} filled\n"
             f"💵 Group A target: {a_target}\n"
