@@ -1,4 +1,4 @@
-name: Scramble Group B Monitor
+name: Scramble GroupB Monitor
 on:
   schedule:
     - cron: '5-55/10 5-19 5-10 * *'
