@@ -3,6 +3,7 @@ import json
 import base64
 import logging
 import requests
+from decimal import Decimal, ROUND_DOWN
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -75,10 +76,26 @@ def fetch_balance(access_token: str) -> float | None:
         logging.info("Balance API response: %d", r.status_code)
         if r.status_code == 200:
             data = r.json()
-            available = float(data.get("available", 0))
-            available = int(available * 100) / 100
-            logging.info("Available cash: %.2f", available)
-            return available
+            logging.info("Full balance response: %s", json.dumps(data))
+
+            available = float(data.get("available") or 0)
+
+            # Add any field whose name contains "bonus" (e.g. Scramble bonus)
+            bonus = 0.0
+            for key, value in data.items():
+                if "bonus" in key.lower():
+                    try:
+                        bonus += float(value or 0)
+                        logging.info("Bonus field '%s' = %s", key, value)
+                    except (TypeError, ValueError):
+                        pass
+
+            # Floor the total to the cent, computed precisely to avoid losing a cent
+            total = Decimal(str(available)) + Decimal(str(bonus))
+            total = float(total.quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+
+            logging.info("Available=%.2f Bonus=%.2f Total=%.2f", available, bonus, total)
+            return total
         logging.warning("Balance API returned %d: %s", r.status_code, r.text[:200])
         return None
     except Exception as e:
