@@ -2,9 +2,8 @@ import os
 import json
 import base64
 import logging
-import random
-import time
 import requests
+from decimal import Decimal, ROUND_DOWN
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -34,7 +33,7 @@ def should_run_now(now: datetime) -> bool:
         return False
     if 5 <= d <= 10:
         return True
-    logging.info("Day %s — not in active schedule, skipping.", d)
+    logging.info("Day %s — not in active schedule (days 5-10 only), skipping.", d)
     return False
 
 def get_access_token(auth: dict) -> str | None:
@@ -88,10 +87,26 @@ def fetch_balance(access_token: str) -> float | None:
         logging.info("Balance API response: %d", r.status_code)
         if r.status_code == 200:
             data = r.json()
-            available = float(data.get("available", 0))
-            available = int(available * 100) / 100
-            logging.info("Available cash: %.2f", available)
-            return available
+            logging.info("Full balance response: %s", json.dumps(data))
+
+            available = float(data.get("available") or 0)
+
+            # Add any field whose name contains "bonus" (e.g. Scramble bonus)
+            bonus = 0.0
+            for key, value in data.items():
+                if "bonus" in key.lower():
+                    try:
+                        bonus += float(value or 0)
+                        logging.info("Bonus field '%s' = %s", key, value)
+                    except (TypeError, ValueError):
+                        pass
+
+            # Floor the total to the cent, computed precisely to avoid losing a cent
+            total = Decimal(str(available)) + Decimal(str(bonus))
+            total = float(total.quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+
+            logging.info("Available=%.2f Bonus=%.2f Total=%.2f", available, bonus, total)
+            return total
         logging.warning("Balance API returned %d: %s", r.status_code, r.text[:200])
         return None
     except Exception as e:
@@ -126,12 +141,7 @@ def check_slots():
     now = datetime.now(TZ)
     if not should_run_now(now):
         return
-    delay = random.randint(0, 60)
-    logging.info("Jitter delay: %ds — scheduled at %s Vilnius.",
-                 delay, now.strftime("%H:%M:%S"))
-    time.sleep(delay)
-    now = datetime.now(TZ)
-    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M:%S"), now.day)
+    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
     try:
         auth = json.loads(AUTH_JSON)
     except Exception as e:
@@ -155,18 +165,18 @@ def check_slots():
         send_all(f"⚠️ Unexpected format: '{group_b_pct}'")
         return
     pct_a_str = group_a_pct or "N/A"
-    remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
-    b_target = f"€{group_b_full:,.0f}" if group_b_full else "N/A"
-    a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
     logging.info("Group B: %s, Group A: %s", group_b_pct, group_a_pct)
     if pct_value == 0:
         logging.info("Group B 0%% — not open yet. No alert.")
     elif 0 < pct_value < 100:
         available = fetch_balance(access_token)
         if available is not None and available < 1.00:
-            logging.info("Available cash €%.2f is below €1.00 — skipping alert.", available)
+            logging.info("Available cash €%.2f < €1.00 — suppressing alert.", available)
             return
         cash_str = f"€{available:,.2f}" if available is not None else "N/A"
+        remaining_str = f"€{group_b_remaining:,.0f}" if group_b_remaining is not None else "N/A"
+        b_target = f"€{group_b_full:,.0f}" if group_b_full else "N/A"
+        a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently {pct_value}% filled ⚡\n"
