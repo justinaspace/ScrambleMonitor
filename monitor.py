@@ -1,5 +1,7 @@
 import os
 import json
+import time
+import random
 import base64
 import logging
 import requests
@@ -142,6 +144,12 @@ def check_slots():
     if not should_run_now(now):
         return
     logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
+
+    # Random jitter 0-60s before the API call to break the metronomic polling pattern
+    jitter = random.uniform(0, 60)
+    logging.info("Sleeping %.1fs jitter before API call.", jitter)
+    time.sleep(jitter)
+
     try:
         auth = json.loads(AUTH_JSON)
     except Exception as e:
