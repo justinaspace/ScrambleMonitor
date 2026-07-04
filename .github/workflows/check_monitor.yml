@@ -1,4 +1,4 @@
-name: Manual Check
+name: ScrambleUp Manual Check
 on:
   workflow_dispatch:
 jobs:
