@@ -236,8 +236,8 @@ def check_slots():
             logging.info("Already alerted for this open window — staying quiet.")
             return
         available = fetch_balance(access_token)
-        if available is not None and available < 1.00:
-            logging.info("Available cash €%.2f < €1.00 — suppressing alert.", available)
+        if available is not None and available < 10.00:
+            logging.info("Available cash €%.2f < €10.00 — suppressing alert.", available)
             return
         cash_str = f"€{available:,.2f}" if available is not None else "N/A"
         remaining_str = f"€{group_b_remaining:,.0f}"
