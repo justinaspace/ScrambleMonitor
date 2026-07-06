@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import random
 import base64
 import logging
 import requests
@@ -13,6 +14,7 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 GROUP_B_URL     = "https://investor.scrambleup.com/investing"
 API_URL         = "https://investor.scrambleup.com/api/investors/invested_in_groups_stats/"
 BALANCE_URL     = "https://investor.scrambleup.com/api/investors/dashboard/balance/"
+STATE_FILE      = "state.json"
 TZ              = ZoneInfo("Europe/Vilnius")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -20,11 +22,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 def send_all(message: str) -> None:
     logging.info(message)
     if not DISCORD_WEBHOOK:
+        logging.warning("No DISCORD_WEBHOOK configured.")
         return
     try:
         requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
     except Exception as e:
-        logging.error("Discord error: %s", e)
+        logging.error("Failed to send Discord: %s", e)
+
+def should_run_now(now: datetime) -> bool:
+    h, d = now.hour, now.day
+    if h >= 22 or h < 7:
+        logging.info("Night skip: %s Vilnius.", now.strftime("%H:%M"))
+        return False
+    if 5 <= d <= 10:
+        return True
+    logging.info("Day %s — not in active schedule (days 5-10 only), skipping.", d)
+    return False
 
 def get_access_token(auth: dict) -> str | None:
     token = auth.get("access_token")
@@ -130,61 +143,106 @@ def parse_groups(data: list) -> tuple:
             logging.info("Group A: full=%.2f remaining=%.2f pct=%s", full, remaining, pct_str)
     return group_b_pct, group_a_pct, group_b_remaining, group_b_full, group_a_full
 
+def load_state() -> dict:
+    defaults = {"alerted_open": False, "auth_alert_sent": False}
+    try:
+        with open(STATE_FILE, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            defaults.update({k: v for k, v in data.items() if k in defaults})
+    except Exception as e:
+        logging.info("No usable state file yet (%s) — starting fresh.", e)
+    return defaults
+
+def save_state(state: dict) -> None:
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+        logging.info("Saved state: %s", state)
+    except Exception as e:
+        logging.error("Could not write state file: %s", e)
+
 def check_slots():
     now = datetime.now(TZ)
-    logging.info("Manual check at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
+    if not should_run_now(now):
+        return
+    logging.info("Running at %s Vilnius, day %s.", now.strftime("%H:%M"), now.day)
+
+    # Random jitter 0-60s before the API call to break the metronomic polling pattern
+    jitter = random.uniform(0, 60)
+    logging.info("Sleeping %.1fs jitter before API call.", jitter)
+    time.sleep(jitter)
+
+    state = load_state()
 
     try:
         auth = json.loads(AUTH_JSON)
     except Exception as e:
-        send_all(f"⚠️ Could not parse SCRAMBLE_AUTH: {e}")
+        if not state.get("auth_alert_sent"):
+            send_all(f"⚠️ Could not parse SCRAMBLE_AUTH: {e}")
+            state["auth_alert_sent"] = True
+            save_state(state)
+        else:
+            logging.info("Auth parse error already alerted earlier — staying quiet.")
         return
 
     access_token = get_access_token(auth if isinstance(auth, dict) else {})
     if not access_token:
-        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
+        if not state.get("auth_alert_sent"):
+            send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
+            state["auth_alert_sent"] = True
+            save_state(state)
+        else:
+            logging.info("Session-expired already alerted earlier — staying quiet.")
         return
 
     data = fetch_groups(access_token)
     if data is None:
-        send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
+        if not state.get("auth_alert_sent"):
+            send_all(f"🔐 Session expired ⚠️\n{GROUP_B_URL} ⬅️ Update token")
+            state["auth_alert_sent"] = True
+            save_state(state)
+        else:
+            logging.info("Session-expired already alerted earlier — staying quiet.")
         return
 
-    group_b_pct, group_a_pct, group_b_remaining, group_b_full, group_a_full = parse_groups(data)
+    if state.get("auth_alert_sent"):
+        logging.info("Auth recovered — clearing auth alert flag.")
+        state["auth_alert_sent"] = False
+        save_state(state)
 
+    group_b_pct, group_a_pct, group_b_remaining, group_b_full, group_a_full = parse_groups(data)
     if group_b_pct is None or group_b_full is None:
         send_all("⚠️ Could not parse group data. Check logs.")
         return
 
-    available = fetch_balance(access_token)
-    cash_str = f"€{available:,.2f}" if available is not None else "N/A"
-
     pct_a_str = group_a_pct or "N/A"
-    remaining_str = f"€{group_b_remaining:,.0f}"
-    b_target = f"€{group_b_full:,.0f}"
-    a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
-
     filled = (group_b_full - group_b_remaining) if group_b_full > 0 else 0
     pct_value = round(filled / group_b_full * 100) if group_b_full > 0 else 0
+    logging.info("Group B: filled=%.2f of %.2f (%d%%)", filled, group_b_full, pct_value)
 
     if filled <= 0:
-        send_all(
-            f"💤 Round not open yet\n"
-            f"💸 Group B target: {b_target}\n"
-            f"💵 Group A target: {a_target}\n"
-            f"💰 Available cash: {cash_str}\n"
-            f"{GROUP_B_URL}"
-        )
+        logging.info("Group B not open yet — no alert.")
+        if state.get("alerted_open"):
+            state["alerted_open"] = False
+            save_state(state)
     elif group_b_remaining <= 0:
-        send_all(
-            f"🔴 Group B - 100% filled\n"
-            f"💸 Group B target: {b_target}\n"
-            f"📊 Group A - {pct_a_str} filled\n"
-            f"💵 Group A target: {a_target}\n"
-            f"💰 Available cash: {cash_str}\n"
-            f"{GROUP_B_URL}\n"
-        )
+        logging.info("Group B full — no alert.")
+        if state.get("alerted_open"):
+            state["alerted_open"] = False
+            save_state(state)
     else:
+        if state.get("alerted_open"):
+            logging.info("Already alerted for this open window — staying quiet.")
+            return
+        available = fetch_balance(access_token)
+        if available is not None and available < 10.00:
+            logging.info("Available cash €%.2f < €10.00 — suppressing alert.", available)
+            return
+        cash_str = f"€{available:,.2f}" if available is not None else "N/A"
+        remaining_str = f"€{group_b_remaining:,.0f}"
+        b_target = f"€{group_b_full:,.0f}"
+        a_target = f"€{group_a_full:,.0f}" if group_a_full else "N/A"
         send_all(
             f"🙂 OPEN investment in Group B!\n"
             f"📈 Currently {pct_value}% filled ⚡\n"
@@ -194,6 +252,9 @@ def check_slots():
             f"💰 Available cash: {cash_str}\n"
             f"{GROUP_B_URL} ⬅️ Invest now\n"
         )
+        logging.info("ALERT SENT — Group B is %d%% full.", pct_value)
+        state["alerted_open"] = True
+        save_state(state)
 
 if __name__ == "__main__":
     check_slots()
